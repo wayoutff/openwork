@@ -1,11 +1,13 @@
 /** @jsxImportSource react */
 import * as React from "react";
-import { ArrowLeft, ArrowRight, FileText, GitCompareArrows, Globe, LockKeyhole, Puzzle } from "lucide-react";
+import { ArrowRight, FileText, GitCompareArrows, Globe, LockKeyhole, Puzzle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export type PanelEmptyActions = {
+  onOpenFiles?: () => void;
+  filesEnabled?: boolean;
   onOpenBrowser?: () => void;
   onOpenExtensions?: () => void;
   onOpenGitChanges?: () => void;
@@ -45,10 +47,11 @@ export function getPanelDestinations(
 
   destinations.push({
     id: "files",
-    label: "Files & artifacts",
-    description: "View files and artifacts created in this session.",
+    label: "Files",
+    description: "Browse, search and preview files in this conversation's project folder.",
     icon: <FileText aria-hidden="true" />,
     activate: onOpenFiles,
+    disabled: !actions.filesEnabled,
   });
 
   if (actions.onOpenExtensions) {
@@ -77,37 +80,10 @@ export function getPanelDestinations(
   return destinations;
 }
 
-export function PanelEmpty({ onOpenBrowser, onOpenExtensions, onOpenGitChanges, gitChangesEnabled }: PanelEmptyActions) {
-  const [destination, setDestination] = React.useState<"chooser" | "files">("chooser");
-
-  if (destination === "files") {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mb-6 w-fit gap-2"
-          onClick={() => setDestination("chooser")}
-        >
-          <ArrowLeft />
-          All destinations
-        </Button>
-        <div className="m-auto max-w-sm text-center">
-          <span className="mx-auto mb-4 flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-            <FileText aria-hidden="true" />
-          </span>
-          <h2 className="text-base font-medium text-foreground">No files or artifacts yet</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Files and artifacts created in this session will appear here automatically.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
+export function PanelEmpty({ onOpenFiles, filesEnabled, onOpenBrowser, onOpenExtensions, onOpenGitChanges, gitChangesEnabled }: PanelEmptyActions) {
   const destinations = getPanelDestinations(
-    { onOpenBrowser, onOpenExtensions, onOpenGitChanges, gitChangesEnabled },
-    () => setDestination("files"),
+    { onOpenFiles, filesEnabled, onOpenBrowser, onOpenExtensions, onOpenGitChanges, gitChangesEnabled },
+    onOpenFiles ?? (() => {}),
   );
 
   return (

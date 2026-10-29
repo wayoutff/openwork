@@ -104,7 +104,8 @@ import { CloudComputerControl } from "../computer/cloud-computer-control";
 import { ComputerControl } from "../computer/computer-control";
 import { useComputerEndTurn } from "../computer/computer-store";
 import { TerminalDock } from "../terminal/terminal-dock";
-import { reconcileClosedBrowserPanel, useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
+import { filesPanelTab, reconcileClosedBrowserPanel, useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
+import { useSessionFilesFeature } from "../panel/use-session-files-feature";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { useControlAction, type OpenworkControlAction } from "../../../shell/control/control-provider";
 import { cn } from "@/lib/utils";
@@ -497,6 +498,7 @@ export function SessionPage(props: SessionPageProps) {
   const gitChangesRailActive = panelRailActive && activePanelTab?.type === "git-changes";
   const filesRailActive = panelRailActive && activePanelTab?.type !== "browser" && activePanelTab?.type !== "git-changes";
   const gitChangesEnabled = useGitChangesFeature();
+  const filesEnabled = useSessionFilesFeature();
   const openGitChanges = useOpenGitChanges(sidePanelSessionKey, props.runtimeWorkspaceId, gitChangesEnabled);
   const showCloudSignIn = shellConfig.cloudSignin && !denAuth.isSignedIn && denAuth.status !== "checking";
   const cloudSignIn = useCloudSignIn();
@@ -935,6 +937,11 @@ export function SessionPage(props: SessionPageProps) {
   }), []);
   useControlAction(setBrowserProxyControlAction);
   const openArtifactRailPane = useCallback(() => {
+    if (filesEnabled) {
+      openTab(sidePanelSessionKey, filesPanelTab());
+      setCurrentSidePanel("panel");
+      return;
+    }
     if (!hasArtifactTargets) {
       const documentTab = activePanelTab?.type !== "browser" && activePanelTab?.type !== "git-changes" && activePanelTab
         ? activePanelTab
@@ -968,7 +975,7 @@ export function SessionPage(props: SessionPageProps) {
     }
 
     setCurrentSidePanel("panel");
-  }, [activePanelTab, artifactFileTargets, hasArtifactTargets, openTab, props.selectedSessionId, selectTab, sessionPanelState, setCurrentSidePanel, sidePanelSessionKey]);
+  }, [filesEnabled, activePanelTab, artifactFileTargets, hasArtifactTargets, openTab, props.selectedSessionId, selectTab, sessionPanelState, setCurrentSidePanel, sidePanelSessionKey]);
   const removeAccessibleTarget = useCallback((target: OpenTarget) => {
     const nextHiddenIds = new Set(hiddenAccessibleTargetIds);
     nextHiddenIds.add(target.id);
@@ -1675,7 +1682,7 @@ export function SessionPage(props: SessionPageProps) {
                   ) : null}
                   <DropdownMenuItem onClick={openArtifactRailPane}>
                     <FileText className="size-4" />
-                    Files{artifactTargetCount > 0 ? ` (${artifactTargetCount})` : ""}
+                    Files{!filesEnabled && artifactTargetCount > 0 ? ` (${artifactTargetCount})` : ""}
                   </DropdownMenuItem>
                   {showCloudSignIn ? (
                     <DropdownMenuItem onClick={openCloudSignIn}>
@@ -2113,12 +2120,12 @@ export function SessionPage(props: SessionPageProps) {
                 filesRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
               )}
               onClick={filesRailActive ? closeRightPane : openArtifactRailPane}
-              title={`Files (${artifactTargetCount})`}
-              aria-label={`Files (${artifactTargetCount})`}
+              title={filesEnabled ? "Files" : `Files (${artifactTargetCount})`}
+              aria-label={filesEnabled ? "Files" : `Files (${artifactTargetCount})`}
               aria-pressed={filesRailActive}
             >
               <FileText size={15} />
-              {artifactTargetCount > 0 ? (
+              {!filesEnabled && artifactTargetCount > 0 ? (
                 <span className="absolute right-0 top-0 flex min-w-3.5 translate-x-1 -translate-y-1 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold leading-3 text-primary-foreground">
                   {artifactTargetCount > 9 ? "9+" : artifactTargetCount}
                 </span>

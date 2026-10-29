@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Globe,
+  FileText,
   GitCompareArrows,
   Loader2,
   MessagesSquare,
@@ -22,6 +23,7 @@ import { AGENT_VIEWPORTS, type AgentViewportKey } from "@openwork/browser-tabs";
 import type { OpenworkServerClient } from "@/app/lib/openwork-server";
 import { PanelTab, PanelTabClose, PanelTabItem, PanelTabList } from "@/components/panel-tabs";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TaskRecovery } from "@/components/chat/task-recovery";
 import {
   InputGroup,
@@ -41,12 +43,17 @@ import {
   type PanelTab as PanelTabEntry,
   useActivePanelTab,
   useSessionPanelState,
+  filesPanelTab,
+  sessionFilePanelTab,
 } from "./panel-tab-store";
 import { useControlAction, type OpenworkControlAction } from "../../../shell/control/control-provider";
 import type { OpenTarget } from "../artifacts/open-target";
 import { useOpenGitChanges, useSidePanelTabs } from "./use-side-panel-tabs";
 import { GitChangesPanel } from "./git-changes-panel";
 import { useGitChangesFeature } from "./use-git-changes-feature";
+import { useSessionFilesFeature } from "./use-session-files-feature";
+import { SessionFilesPanel } from "./session-files-panel";
+import { SessionFilePreview } from "./session-file-preview";
 import { handlePanelEscape, PanelEmpty } from "./panel-empty";
 import {
   getElectronBrowser,
@@ -209,7 +216,7 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
             ) : (
               <Globe />
             )
-          ) : tab.type === "git-changes" ? <GitCompareArrows /> : (tab.type === "app" || tab.type === "mcp-app") ? <Blocks /> : tab.type === "remote-thread" ? <MessagesSquare /> : (
+          ) : (tab.type === "files" || tab.type === "session-file") ? <FileText /> : tab.type === "git-changes" ? <GitCompareArrows /> : (tab.type === "app" || tab.type === "mcp-app") ? <Blocks /> : tab.type === "remote-thread" ? <MessagesSquare /> : (
             <ArtifactIcon type={tab.preview} />
           )}
           <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
@@ -607,6 +614,8 @@ export function SidePanel({
   const activeTab = useActivePanelTab(sessionId);
   const isBrowserAvailable = Boolean(getElectronBrowser());
   const gitChangesEnabled = useGitChangesFeature();
+  const filesEnabled = useSessionFilesFeature();
+  const openFiles = () => { if (filesEnabled) usePanelTabStore.getState().openTab(sessionId, filesPanelTab()); };
   const openGitChanges = useOpenGitChanges(sessionId, workspaceId, gitChangesEnabled);
 
   const { createTab, closeTab, selectTab, reorderTabs } = useSidePanelTabs(sessionId);
@@ -818,23 +827,15 @@ export function SidePanel({
               </PanelTabList>
             </div>
             {!activeTab ? <span className="sr-only">Panel destinations</span> : null}
-            {activeTab && isBrowserAvailable ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={(
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => createTab()}
-                      aria-label="New tab"
-                    >
-                      <Plus />
-                    </Button>
-                  )}
-                />
-                <TooltipContent>New tab</TooltipContent>
-              </Tooltip>
-            ) : !activeTab ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="New tab"><Plus /></Button>} />
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled={!filesEnabled || !workspaceId} onClick={openFiles}><FileText />Files</DropdownMenuItem>
+                <DropdownMenuItem disabled={!gitChangesEnabled || !workspaceId} onClick={openGitChanges}><GitCompareArrows />Git changes</DropdownMenuItem>
+                {isBrowserAvailable ? <DropdownMenuItem onClick={() => createTab()}><Globe />Browser</DropdownMenuItem> : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {!activeTab ? (
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -844,13 +845,15 @@ export function SidePanel({
                 <X />
               </Button>
             ) : null}
-            {activeTab?.type === "git-changes" ? (
+            {activeTab && ["git-changes", "files", "session-file"].includes(activeTab.type) ? (
               <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close panel"><X /></Button>
             ) : null}
           </div>
         </div> : null}
         {!activeTab ? (
           <PanelEmpty
+            onOpenFiles={openFiles}
+            filesEnabled={filesEnabled && Boolean(workspaceId)}
             onOpenBrowser={isBrowserAvailable ? createTab : undefined}
             onOpenExtensions={onOpenExtensions}
             onOpenGitChanges={workspaceId ? openGitChanges : undefined}
@@ -866,6 +869,13 @@ export function SidePanel({
               presentation={browserPresentation ? { ...browserPresentation, mode: "side" } : undefined}
             />
           )
+        ) : activeTab?.type === "files" ? (
+          filesEnabled && workspaceId ? <SessionFilesPanel client={client} workspaceId={workspaceId} sessionId={gitSessionId}
+            onOpenFile={(path, rootId, directory) => usePanelTabStore.getState().openTab(sessionId, sessionFilePanelTab(workspaceId, directory, rootId, path))} />
+            : <p className="p-4 text-sm text-muted-foreground">File browser is disabled in Advanced settings or by your administrator.</p>
+        ) : activeTab?.type === "session-file" ? (
+          filesEnabled && workspaceId === activeTab.workspaceId ? <SessionFilePreview client={client} workspaceId={activeTab.workspaceId} sessionId={gitSessionId} path={activeTab.path} rootId={activeTab.rootId} />
+            : <p className="p-4 text-sm text-muted-foreground">Open this file from the current workspace.</p>
         ) : activeTab?.type === "git-changes" ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {workspaceId === activeTab.workspaceId ? (

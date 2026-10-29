@@ -61,6 +61,16 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "sessionFileBrowser": {
+              "enum": [
+                "",
+                "true",
+                "false",
+                true,
+                false
+              ],
+              "description": "Session file browser: Browse and preview files in the current conversation folder from a dedicated side tab. Renders DEN_FEATURE_SESSION_FILE_BROWSER."
+            },
             "gitChangesPanel": {
               "enum": [
                 "",

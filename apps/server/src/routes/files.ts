@@ -208,7 +208,7 @@ function decodeArtifactId(id: string): string {
   }
 }
 
-function contentTypeForPath(path: string): string {
+export function contentTypeForPath(path: string): string {
   const lowered = path.toLowerCase();
   if (lowered.endsWith(".html") || lowered.endsWith(".htm")) return "text/html; charset=utf-8";
   if (lowered.endsWith(".svg")) return "image/svg+xml";

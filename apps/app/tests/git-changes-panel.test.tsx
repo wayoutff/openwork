@@ -30,6 +30,26 @@ test("Git tab opening is idempotent and scoped to a workspace and session", () =
   expect(sessions["session-1"].activeTabId).toBe("git-changes:workspace-2");
 });
 
+test("Files has its own tab and survives browser and artifact updates", () => {
+  const state = store.usePanelTabStore.getState();
+  state.openTab("session-1", store.filesPanelTab());
+  state.openTab("session-1", store.filesPanelTab());
+  state.syncBrowserTabs("session-1", [], null);
+  state.syncTranscriptArtifacts("session-1", []);
+  expect(store.usePanelTabStore.getState().sessions["session-1"].tabs).toHaveLength(1);
+  expect(store.usePanelTabStore.getState().sessions["session-1"].activeTabId).toBe("session-files");
+  expect(store.reconcileClosedBrowserPanel("session-1")).toBe(true);
+});
+
+test("file preview tabs deduplicate within a root but not across moved directories", () => {
+  const state = store.usePanelTabStore.getState();
+  const file = store.sessionFilePanelTab("workspace", "/project", "root-1", "src/index.ts");
+  state.openTab("session", file);
+  state.openTab("session", file);
+  state.openTab("session", store.sessionFilePanelTab("workspace", "/other", "root-2", "src/index.ts"));
+  expect(store.usePanelTabStore.getState().sessions.session.tabs).toHaveLength(2);
+});
+
 test("background browser synchronization preserves Git selection and closing selects neighbor", () => {
   const state = store.usePanelTabStore.getState();
   state.openTab("session-1", { id: "file:example.ts", type: "artifact", label: "example.ts", preview: "code" });
@@ -49,6 +69,17 @@ test("destination remains locked when feature is off and activates the shared co
   expect(enabled?.disabled).toBe(false);
   enabled?.activate();
   expect(opens).toBe(1);
+});
+
+test("Files destination opens a real file browser rather than an anonymous empty screen", () => {
+  let opens = 0;
+  const openFiles = () => { opens++; };
+  const entry = destinations.getPanelDestinations({ filesEnabled: true }, openFiles).find((item) => item.id === "files");
+  expect(entry?.label).toBe("Files");
+  expect(entry?.disabled).toBe(false);
+  entry?.activate();
+  expect(opens).toBe(1);
+  expect(destinations.getPanelDestinations({ filesEnabled: false }, openFiles).find((item) => item.id === "files")?.disabled).toBe(true);
 });
 
 test("closing the last browser preserves Git and selects it before native state arrives", () => {
