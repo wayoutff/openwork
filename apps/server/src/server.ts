@@ -112,6 +112,7 @@ import { isAllowedHost } from "./allowed-hosts.js";
 import { externalFetch, loopbackFetch, transferResponseBody } from "./server-fetch.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerFileRoutes } from "./routes/files.js";
+import { registerGitChangesRoutes } from "./routes/git-changes.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionGroupRoutes } from "./routes/session-groups.js";
@@ -3875,6 +3876,13 @@ function createRoutes(
   });
 
   registerUiControlRoutes({ routes, jsonResponse, readJsonBody, requireClientScope });
+
+  registerGitChangesRoutes({
+    routes,
+    resolveWorkspace: (id) => resolveWorkspaceWithoutBootstrap(config, id),
+    resolveSessionDirectory: (workspace, sessionId) => resolveV2SessionExecutionDirectory(config, engineV2Preview, workspace, sessionId),
+    connection: () => engineV2Preview.connection() ?? null,
+  });
 
   registerFileRoutes({
     routes,

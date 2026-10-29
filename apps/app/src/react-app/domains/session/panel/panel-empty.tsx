@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import * as React from "react";
-import { ArrowLeft, ArrowRight, FileText, Globe, Puzzle } from "lucide-react";
+import { ArrowLeft, ArrowRight, FileText, GitCompareArrows, Globe, LockKeyhole, Puzzle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 export type PanelEmptyActions = {
   onOpenBrowser?: () => void;
   onOpenExtensions?: () => void;
+  onOpenGitChanges?: () => void;
+  gitChangesEnabled?: boolean;
 };
 
 export function handlePanelEscape(key: string, onClose: () => void) {
@@ -17,11 +19,12 @@ export function handlePanelEscape(key: string, onClose: () => void) {
 }
 
 type PanelDestination = {
-  id: "browser" | "files" | "extensions";
+  id: "browser" | "files" | "extensions" | "git-changes";
   label: string;
   description: string;
   icon: React.ReactNode;
   activate: () => void;
+  disabled?: boolean;
 };
 
 export function getPanelDestinations(
@@ -58,10 +61,23 @@ export function getPanelDestinations(
     });
   }
 
+  if (actions.onOpenGitChanges) {
+    destinations.push({
+      id: "git-changes",
+      label: "Git changes",
+      description: actions.gitChangesEnabled
+        ? "Review changes in the working folder or compare a branch."
+        : "Disabled in Advanced settings or by your administrator.",
+      icon: actions.gitChangesEnabled ? <GitCompareArrows aria-hidden="true" /> : <LockKeyhole aria-hidden="true" />,
+      activate: actions.onOpenGitChanges,
+      disabled: !actions.gitChangesEnabled,
+    });
+  }
+
   return destinations;
 }
 
-export function PanelEmpty({ onOpenBrowser, onOpenExtensions }: PanelEmptyActions) {
+export function PanelEmpty({ onOpenBrowser, onOpenExtensions, onOpenGitChanges, gitChangesEnabled }: PanelEmptyActions) {
   const [destination, setDestination] = React.useState<"chooser" | "files">("chooser");
 
   if (destination === "files") {
@@ -90,7 +106,7 @@ export function PanelEmpty({ onOpenBrowser, onOpenExtensions }: PanelEmptyAction
   }
 
   const destinations = getPanelDestinations(
-    { onOpenBrowser, onOpenExtensions },
+    { onOpenBrowser, onOpenExtensions, onOpenGitChanges, gitChangesEnabled },
     () => setDestination("files"),
   );
 
@@ -103,11 +119,13 @@ export function PanelEmpty({ onOpenBrowser, onOpenExtensions }: PanelEmptyAction
         </p>
         <div className="mt-5 grid gap-2" aria-label="Panel destinations">
           {destinations.map((item) => (
-            <button
+            <Button
               key={item.id}
               type="button"
+              variant="ghost"
+              disabled={item.disabled}
               className={cn(
-                "group flex min-h-16 w-full items-center gap-3 rounded-xl border border-border bg-background p-3 text-left",
+                "group flex h-auto min-h-16 w-full items-center gap-3 whitespace-normal rounded-xl border border-border bg-background p-3 text-left",
                 "transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               )}
               onClick={() => item.activate()}
@@ -120,7 +138,7 @@ export function PanelEmpty({ onOpenBrowser, onOpenExtensions }: PanelEmptyAction
                 <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{item.description}</span>
               </span>
               <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-            </button>
+            </Button>
           ))}
         </div>
       </div>

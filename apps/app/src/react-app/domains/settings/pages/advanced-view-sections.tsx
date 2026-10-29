@@ -703,7 +703,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
 }
 
 export function AdvancedWorkspaceRunModeSection() {
-  const { workspaceRunModeEnabled, toggleWorkspaceRunMode } = useFeatureFlagsPreferences();
+  const { workspaceRunModeEnabled, toggleWorkspaceRunMode, gitChangesPanelEnabled, toggleGitChangesPanel } = useFeatureFlagsPreferences();
   const restricted = useDesktopRestriction("allowControlSettings");
   return (
     <LayoutSection id="advanced-workspace-run-mode">
@@ -730,6 +730,21 @@ export function AdvancedWorkspaceRunModeSection() {
         <LayoutSectionItemFootnote>
           This switch only shows or hides the control. Hiding it does not reset workspace permissions; choose Workspace defaults in the menu first if you want to remove the override.
         </LayoutSectionItemFootnote>
+      </LayoutSectionItem>
+      <LayoutSectionItem>
+        <LayoutSectionItemHeader>
+          <LayoutSectionItemTitle>Git changes panel</LayoutSectionItemTitle>
+          <LayoutSectionItemDescription>Review local Git changes beside the chat. Managed workspaces follow their organization policy.</LayoutSectionItemDescription>
+          <LayoutSectionItemHeaderActions>
+            <Switch
+              data-testid="git-changes-panel-flag"
+              aria-label="Git changes panel"
+              checked={gitChangesPanelEnabled}
+              disabled={restricted || !isDesktopRuntime()}
+              onCheckedChange={toggleGitChangesPanel}
+            />
+          </LayoutSectionItemHeaderActions>
+        </LayoutSectionItemHeader>
       </LayoutSectionItem>
     </LayoutSection>
   );

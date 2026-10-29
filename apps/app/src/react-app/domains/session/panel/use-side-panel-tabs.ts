@@ -6,6 +6,7 @@ import { toast } from "@/components/ui/sonner";
 
 import {
   type PanelTab,
+  gitChangesPanelTab,
   usePanelTabStore,
 } from "./panel-tab-store";
 import { getElectronBrowser } from "./utils";
@@ -109,6 +110,13 @@ export function useCreateTab() {
       toast.error(error instanceof Error ? error.message : String(error));
     }
   }, []);
+}
+
+export function useOpenGitChanges(sessionId: string, workspaceId: string | null, enabled: boolean) {
+  const openTab = usePanelTabStore((state) => state.openTab);
+  return React.useCallback(() => {
+    if (enabled && workspaceId) openTab(sessionId, gitChangesPanelTab(workspaceId));
+  }, [enabled, openTab, sessionId, workspaceId]);
 }
 
 export function useCloseTab() {

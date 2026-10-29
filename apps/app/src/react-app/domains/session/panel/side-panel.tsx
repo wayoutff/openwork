@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Globe,
+  GitCompareArrows,
   Loader2,
   MessagesSquare,
   Maximize2,
@@ -43,7 +44,9 @@ import {
 } from "./panel-tab-store";
 import { useControlAction, type OpenworkControlAction } from "../../../shell/control/control-provider";
 import type { OpenTarget } from "../artifacts/open-target";
-import { useSidePanelTabs } from "./use-side-panel-tabs";
+import { useOpenGitChanges, useSidePanelTabs } from "./use-side-panel-tabs";
+import { GitChangesPanel } from "./git-changes-panel";
+import { useGitChangesFeature } from "./use-git-changes-feature";
 import { handlePanelEscape, PanelEmpty } from "./panel-empty";
 import {
   getElectronBrowser,
@@ -63,6 +66,7 @@ export type BrowserPresentationControls = {
 type SidePanelProps = {
   sessionId: string;
   client: OpenworkServerClient | null;
+  gitSessionId?: string;
   workspaceId: string | null;
   workspaceRoot: string;
   onClose: () => void;
@@ -205,7 +209,7 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
             ) : (
               <Globe />
             )
-          ) : (tab.type === "app" || tab.type === "mcp-app") ? <Blocks /> : tab.type === "remote-thread" ? <MessagesSquare /> : (
+          ) : tab.type === "git-changes" ? <GitCompareArrows /> : (tab.type === "app" || tab.type === "mcp-app") ? <Blocks /> : tab.type === "remote-thread" ? <MessagesSquare /> : (
             <ArtifactIcon type={tab.preview} />
           )}
           <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
@@ -590,6 +594,7 @@ export function BrowserPanelContent({
 
 export function SidePanel({
   sessionId,
+  gitSessionId,
   client,
   workspaceId,
   workspaceRoot,
@@ -601,6 +606,8 @@ export function SidePanel({
   const { tabs } = useSessionPanelState(sessionId);
   const activeTab = useActivePanelTab(sessionId);
   const isBrowserAvailable = Boolean(getElectronBrowser());
+  const gitChangesEnabled = useGitChangesFeature();
+  const openGitChanges = useOpenGitChanges(sessionId, workspaceId, gitChangesEnabled);
 
   const { createTab, closeTab, selectTab, reorderTabs } = useSidePanelTabs(sessionId);
 
@@ -785,7 +792,8 @@ export function SidePanel({
     <TooltipProvider delay={1000}>
       <div
         className="flex h-full flex-col"
-        onKeyDownCapture={(event) => {
+        onKeyDown={(event) => {
+          if (event.defaultPrevented) return;
           if (!handlePanelEscape(event.key, onClose)) return;
           event.preventDefault();
           event.stopPropagation();
@@ -836,12 +844,17 @@ export function SidePanel({
                 <X />
               </Button>
             ) : null}
+            {activeTab?.type === "git-changes" ? (
+              <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close panel"><X /></Button>
+            ) : null}
           </div>
         </div> : null}
         {!activeTab ? (
           <PanelEmpty
             onOpenBrowser={isBrowserAvailable ? createTab : undefined}
             onOpenExtensions={onOpenExtensions}
+            onOpenGitChanges={workspaceId ? openGitChanges : undefined}
+            gitChangesEnabled={gitChangesEnabled}
           />
         ) : null}
         {activeTab?.type === "browser" ? (
@@ -853,6 +866,12 @@ export function SidePanel({
               presentation={browserPresentation ? { ...browserPresentation, mode: "side" } : undefined}
             />
           )
+        ) : activeTab?.type === "git-changes" ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {workspaceId === activeTab.workspaceId ? (
+              <GitChangesPanel client={client} workspaceId={workspaceId} sessionId={gitSessionId} />
+            ) : <p className="p-4 text-sm text-muted-foreground">Open Git changes from the current workspace.</p>}
+          </div>
         ) : activeTab?.type === "mcp-app" ? (
           <BuiltMcpAppPanel key={activeTab.id} tab={activeTab} onClose={onClose} />
         ) : activeTab?.type === "remote-thread" ? (

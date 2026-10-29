@@ -50,6 +50,7 @@ export type LocalPreferences = {
   releaseChannel: ReleaseChannel;
   featureFlags: {
     workspaceRunMode: boolean;
+    gitChangesPanel?: boolean;
   };
   /**
    * Set to true after the user completes the welcome/onboarding flow

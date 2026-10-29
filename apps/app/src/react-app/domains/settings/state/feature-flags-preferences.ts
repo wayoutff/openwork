@@ -6,6 +6,16 @@ export function useFeatureFlagsPreferences() {
   const { prefs, setPrefs } = useLocal();
 
   const workspaceRunModeEnabled = prefs.featureFlags?.workspaceRunMode === true;
+  const gitChangesPanelEnabled = prefs.featureFlags?.gitChangesPanel === true;
+  const toggleGitChangesPanel = () => {
+    setPrefs((previous) => ({
+      ...previous,
+      featureFlags: {
+        ...previous.featureFlags,
+        gitChangesPanel: !previous.featureFlags?.gitChangesPanel,
+      },
+    }));
+  };
   const toggleWorkspaceRunMode = useCallback(() => {
     setPrefs((previous) => ({
       ...previous,
@@ -19,5 +29,7 @@ export function useFeatureFlagsPreferences() {
   return {
     workspaceRunModeEnabled,
     toggleWorkspaceRunMode,
+    gitChangesPanelEnabled,
+    toggleGitChangesPanel,
   };
 }

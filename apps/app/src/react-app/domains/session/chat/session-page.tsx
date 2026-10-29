@@ -9,7 +9,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { DesktopUpdateButton } from "../../settings/state/desktop-updater-provider";
-import { ArrowLeft, CheckCheck, Cloud, FileText, Globe, Maximize2, MoreHorizontal, PanelRight, TextSearch, Undo2, X, Zap } from "lucide-react";
+import { ArrowLeft, CheckCheck, Cloud, FileText, GitCompareArrows, Globe, Maximize2, MoreHorizontal, PanelRight, TextSearch, Undo2, X, Zap } from "lucide-react";
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
 import { t } from "../../../../i18n";
@@ -91,7 +91,8 @@ import { nativeFileAction, resolveCollectibleOpenTarget } from "../artifacts/res
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey } from "../panel/side-panel-session";
-import { useCreateTab, useOpenBrowserRailPane } from "../panel/use-side-panel-tabs";
+import { useCreateTab, useOpenBrowserRailPane, useOpenGitChanges } from "../panel/use-side-panel-tabs";
+import { useGitChangesFeature } from "../panel/use-git-changes-feature";
 import { useBrowserPresentationController } from "../panel/use-browser-presentation";
 import { useBrowserAgentTurns } from "../panel/agent-viewport";
 import { BrowserPresentationSurfaces, BrowserRailButton } from "../panel/browser-presentation";
@@ -103,7 +104,7 @@ import { CloudComputerControl } from "../computer/cloud-computer-control";
 import { ComputerControl } from "../computer/computer-control";
 import { useComputerEndTurn } from "../computer/computer-store";
 import { TerminalDock } from "../terminal/terminal-dock";
-import { useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
+import { reconcileClosedBrowserPanel, useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { useControlAction, type OpenworkControlAction } from "../../../shell/control/control-provider";
 import { cn } from "@/lib/utils";
@@ -493,7 +494,10 @@ export function SessionPage(props: SessionPageProps) {
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
   const browserRailActive = panelRailActive && activePanelTab?.type === "browser";
-  const filesRailActive = panelRailActive && activePanelTab?.type !== "browser";
+  const gitChangesRailActive = panelRailActive && activePanelTab?.type === "git-changes";
+  const filesRailActive = panelRailActive && activePanelTab?.type !== "browser" && activePanelTab?.type !== "git-changes";
+  const gitChangesEnabled = useGitChangesFeature();
+  const openGitChanges = useOpenGitChanges(sidePanelSessionKey, props.runtimeWorkspaceId, gitChangesEnabled);
   const showCloudSignIn = shellConfig.cloudSignin && !denAuth.isSignedIn && denAuth.status !== "checking";
   const cloudSignIn = useCloudSignIn();
   // The browser opens on Den's sign-up tab (label stays "Sign in").
@@ -689,7 +693,10 @@ export function SessionPage(props: SessionPageProps) {
     const unsubClose = browser.onPanelClosed?.((payload) => {
       const ownerSessionId = payload?.ownerSessionId ?? null;
       handleBrowserPanelClosed(ownerSessionId);
-      const ownerKey = getSidePanelSessionKey(ownerSessionId);
+      const ownerKey = ownerSessionId === null ? sidePanelSessionKey : getSidePanelSessionKey(ownerSessionId);
+      // panel-closed means this owner has no browser tabs, not no panel tabs.
+      // Reconcile before inspecting the selection: native state events may arrive later.
+      if (reconcileClosedBrowserPanel(ownerKey)) return;
       if (ownerSessionId === null || ownerKey === sidePanelSessionKey) {
         setCurrentSidePanel(null);
         return;
@@ -929,9 +936,9 @@ export function SessionPage(props: SessionPageProps) {
   useControlAction(setBrowserProxyControlAction);
   const openArtifactRailPane = useCallback(() => {
     if (!hasArtifactTargets) {
-      const documentTab = activePanelTab?.type !== "browser" && activePanelTab
+      const documentTab = activePanelTab?.type !== "browser" && activePanelTab?.type !== "git-changes" && activePanelTab
         ? activePanelTab
-        : sessionPanelState.tabs.find((tab) => tab.type !== "browser");
+        : sessionPanelState.tabs.find((tab) => tab.type !== "browser" && tab.type !== "git-changes");
       selectTab(sidePanelSessionKey, documentTab?.id ?? null);
       setCurrentSidePanel("panel");
       return;
@@ -1403,6 +1410,7 @@ export function SessionPage(props: SessionPageProps) {
   ) : activeSidePanel === "panel" ? (
     <SidePanel
       sessionId={sidePanelSessionKey}
+      gitSessionId={props.selectedSessionId ?? undefined}
       client={props.openworkServerClient}
       workspaceId={props.runtimeWorkspaceId}
       workspaceRoot={props.selectedWorkspaceRoot}
@@ -2116,6 +2124,19 @@ export function SessionPage(props: SessionPageProps) {
                 </span>
               ) : null}
             </Button>
+            {props.runtimeWorkspaceId ? <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn("rounded-xl transition-colors hover:bg-muted hover:text-foreground", gitChangesRailActive && "bg-primary/10 text-primary")}
+              disabled={!gitChangesEnabled}
+              onClick={() => {
+                if (gitChangesRailActive) closeRightPane();
+                else { openGitChanges(); setCurrentSidePanel("panel"); }
+              }}
+              title={gitChangesEnabled ? "Git changes" : "Git changes: disabled in Advanced settings or by your administrator"}
+              aria-label="Git changes"
+              aria-pressed={gitChangesRailActive}
+            ><GitCompareArrows size={16} /></Button> : null}
             <DebugRailSlot />
           </aside>
           </div>

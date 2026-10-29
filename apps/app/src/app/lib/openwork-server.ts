@@ -1704,6 +1704,14 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
 
   return {
     baseUrl,
+    getGitChanges: (workspaceId: string, input: { sessionId?: string; mode: "working" | "branch"; base?: string; signal?: AbortSignal }) => {
+      const query = new URLSearchParams({ mode: input.mode });
+      if (input.sessionId) query.set("sessionId", input.sessionId);
+      if (input.base) query.set("base", input.base);
+      return requestJson<unknown>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/git/changes?${query}`, {
+        token, hostToken, signal: input.signal, timeoutMs: 45_000,
+      });
+    },
     cloudComputerStatus: () => requestJson<{ ready: boolean; paused: boolean; busy: boolean; sessionId: string | null }>(baseUrl, "/cloud-computer/status", { token, timeoutMs: 15_000 }),
     cloudComputerFrame: () => requestJson<{ dataUrl: string; width: number; height: number; screenWidth: number; screenHeight: number; generation: number }>(baseUrl, "/cloud-computer/frame", { token, timeoutMs: 15_000 }),
     cloudComputerInteract: (body: Record<string, unknown>) => requestJson<unknown>(baseUrl, "/cloud-computer/interact", { token, method: "POST", body, timeoutMs: 15_000 }),

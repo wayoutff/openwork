@@ -104,6 +104,17 @@ function defineFeatures<const T extends Record<string, FeatureDefinition>>(featu
 const everywhere = ["cloud", "self_hosted"] as const
 
 export const FEATURES = defineFeatures({
+  gitChangesPanel: {
+    label: "Git changes panel",
+    description: "Review working tree and branch changes beside the chat with unified or split diffs.",
+    category: "experience",
+    added: "2026-10-29",
+    since: "2026-10",
+    author: "wayoutff",
+    docs: "docs/plans/git-changes-panel.md",
+    deployments: everywhere,
+    default: false,
+  },
   libraryDetailBreadcrumbs: {
     label: "Library: detail breadcrumbs",
     description: "Navigate from a skill or connector to its parent plugin or Library category without losing your place.",

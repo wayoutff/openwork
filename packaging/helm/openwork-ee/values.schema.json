@@ -61,6 +61,16 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "gitChangesPanel": {
+              "enum": [
+                "",
+                "true",
+                "false",
+                true,
+                false
+              ],
+              "description": "Git changes panel: Review working tree and branch changes beside the chat with unified or split diffs. Renders DEN_FEATURE_GIT_CHANGES_PANEL."
+            },
             "libraryDetailBreadcrumbs": {
               "enum": [
                 "",

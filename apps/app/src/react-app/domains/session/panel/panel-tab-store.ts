@@ -7,7 +7,13 @@ import { isCollectibleArtifactTarget, type OpenTarget, type OpenTargetPreview } 
 
 export const PERSISTED_PANEL_TAB_STORE_KEY = "openwork:panel-tabs:v1";
 
-export type PanelTabType = "artifact" | "browser" | "app" | "mcp-app" | "remote-thread";
+/** The native browser owns only browser tabs, not the shared side panel. */
+export function reconcileClosedBrowserPanel(sessionId: string): boolean {
+  usePanelTabStore.getState().syncBrowserTabs(sessionId, [], null);
+  return (usePanelTabStore.getState().sessions[sessionId]?.tabs.length ?? 0) > 0;
+}
+
+export type PanelTabType = "artifact" | "browser" | "app" | "mcp-app" | "remote-thread" | "git-changes";
 
 export type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
 import type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
@@ -27,7 +33,13 @@ export type McpAppPanelTab = { id: string; type: "mcp-app"; label: string; appId
 /** A task running on another computer, opened from its row in the chat. */
 export type RemoteThreadPanelTab = { id: string; type: "remote-thread"; label: string; threadKey: string; owner: { workspaceId: string; sessionId: string } };
 
-export type PanelTab = BrowserPanelTab | ArtifactPanelTab | AppPanelTab | McpAppPanelTab | RemoteThreadPanelTab;
+export type GitChangesPanelTab = { id: string; type: "git-changes"; label: string; workspaceId: string };
+
+export function gitChangesPanelTab(workspaceId: string): GitChangesPanelTab {
+  return { id: `git-changes:${workspaceId}`, type: "git-changes", label: "Git changes", workspaceId };
+}
+
+export type PanelTab = BrowserPanelTab | ArtifactPanelTab | AppPanelTab | McpAppPanelTab | RemoteThreadPanelTab | GitChangesPanelTab;
 
 export type SessionPanelState = {
   tabs: PanelTab[];
@@ -155,6 +167,10 @@ function isSameTab(left: PanelTab, right: PanelTab) {
 
   if (left.type === "remote-thread" && right.type === "remote-thread") {
     return left.label === right.label && left.threadKey === right.threadKey;
+  }
+
+  if (left.type === "git-changes" && right.type === "git-changes") {
+    return left.label === right.label && left.workspaceId === right.workspaceId;
   }
 
   if (left.type === "app" && right.type === "app") {
