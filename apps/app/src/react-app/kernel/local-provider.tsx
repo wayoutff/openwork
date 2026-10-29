@@ -51,6 +51,7 @@ export type LocalPreferences = {
   featureFlags: {
     workspaceRunMode: boolean;
     gitChangesPanel?: boolean;
+    sessionFileBrowser?: boolean;
   };
   /**
    * Set to true after the user completes the welcome/onboarding flow

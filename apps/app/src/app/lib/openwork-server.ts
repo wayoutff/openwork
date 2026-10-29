@@ -1704,6 +1704,22 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
 
   return {
     baseUrl,
+    getSessionFiles: (workspaceId: string, input: { sessionId?: string; path?: string; query?: string; signal?: AbortSignal }) => {
+      const query = new URLSearchParams({ path: input.path ?? "" });
+      if (input.sessionId) query.set("sessionId", input.sessionId);
+      if (input.query) query.set("query", input.query);
+      return requestJson<unknown>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/files/browser?${query}`, {
+        token, hostToken, signal: input.signal, timeoutMs: 20_000,
+      });
+    },
+    getSessionFileContent: (workspaceId: string, input: { sessionId?: string; path: string; rootId?: string; signal?: AbortSignal }) => {
+      const query = new URLSearchParams({ path: input.path });
+      if (input.sessionId) query.set("sessionId", input.sessionId);
+      if (input.rootId) query.set("rootId", input.rootId);
+      return requestJson<unknown>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/files/browser/content?${query}`, {
+        token, hostToken, signal: input.signal, timeoutMs: 20_000,
+      });
+    },
     getGitChanges: (workspaceId: string, input: { sessionId?: string; mode: "working" | "branch"; base?: string; signal?: AbortSignal }) => {
       const query = new URLSearchParams({ mode: input.mode });
       if (input.sessionId) query.set("sessionId", input.sessionId);

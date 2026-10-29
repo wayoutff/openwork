@@ -7,6 +7,11 @@ export function useFeatureFlagsPreferences() {
 
   const workspaceRunModeEnabled = prefs.featureFlags?.workspaceRunMode === true;
   const gitChangesPanelEnabled = prefs.featureFlags?.gitChangesPanel === true;
+  const sessionFileBrowserEnabled = prefs.featureFlags?.sessionFileBrowser === true;
+  const toggleSessionFileBrowser = () => setPrefs((previous) => ({
+    ...previous,
+    featureFlags: { ...previous.featureFlags, sessionFileBrowser: !previous.featureFlags?.sessionFileBrowser },
+  }));
   const toggleGitChangesPanel = () => {
     setPrefs((previous) => ({
       ...previous,
@@ -31,5 +36,7 @@ export function useFeatureFlagsPreferences() {
     toggleWorkspaceRunMode,
     gitChangesPanelEnabled,
     toggleGitChangesPanel,
+    sessionFileBrowserEnabled,
+    toggleSessionFileBrowser,
   };
 }

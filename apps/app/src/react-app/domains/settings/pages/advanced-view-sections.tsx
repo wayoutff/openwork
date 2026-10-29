@@ -703,7 +703,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
 }
 
 export function AdvancedWorkspaceRunModeSection() {
-  const { workspaceRunModeEnabled, toggleWorkspaceRunMode, gitChangesPanelEnabled, toggleGitChangesPanel } = useFeatureFlagsPreferences();
+  const { workspaceRunModeEnabled, toggleWorkspaceRunMode, gitChangesPanelEnabled, toggleGitChangesPanel, sessionFileBrowserEnabled, toggleSessionFileBrowser } = useFeatureFlagsPreferences();
   const restricted = useDesktopRestriction("allowControlSettings");
   return (
     <LayoutSection id="advanced-workspace-run-mode">
@@ -743,6 +743,15 @@ export function AdvancedWorkspaceRunModeSection() {
               disabled={restricted || !isDesktopRuntime()}
               onCheckedChange={toggleGitChangesPanel}
             />
+          </LayoutSectionItemHeaderActions>
+        </LayoutSectionItemHeader>
+      </LayoutSectionItem>
+      <LayoutSectionItem>
+        <LayoutSectionItemHeader>
+          <LayoutSectionItemTitle>File browser</LayoutSectionItemTitle>
+          <LayoutSectionItemDescription>Browse and preview files in the current conversation folder.</LayoutSectionItemDescription>
+          <LayoutSectionItemHeaderActions>
+            <Switch data-testid="session-file-browser-flag" aria-label="File browser" checked={sessionFileBrowserEnabled} disabled={restricted || !isDesktopRuntime()} onCheckedChange={toggleSessionFileBrowser} />
           </LayoutSectionItemHeaderActions>
         </LayoutSectionItemHeader>
       </LayoutSectionItem>

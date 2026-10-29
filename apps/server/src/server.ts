@@ -113,6 +113,7 @@ import { externalFetch, loopbackFetch, transferResponseBody } from "./server-fet
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerGitChangesRoutes } from "./routes/git-changes.js";
+import { registerSessionFileRoutes } from "./routes/session-files.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionGroupRoutes } from "./routes/session-groups.js";
@@ -1402,6 +1403,7 @@ async function resolveV2SessionExecutionDirectory(
   engineV2Preview: EngineV2Preview,
   workspace: WorkspaceInfo,
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   if (!sessionId.startsWith("ses_")) return null;
   const connection = engineV2Preview.connection();
@@ -1410,7 +1412,7 @@ async function resolveV2SessionExecutionDirectory(
   const readNative = async (path: string): Promise<unknown> => {
     const url = new URL(path, connection.url);
     url.searchParams.set("location[directory]", workspace.path);
-    const result = await loopbackFetch(url.toString(), { headers: { authorization }, signal: AbortSignal.timeout(10_000) });
+    const result = await loopbackFetch(url.toString(), { headers: { authorization }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
     if (!result.ok) throw new ApiError(result.status, "session_unavailable", "Conversation could not be read");
     return result.json();
   };
@@ -1420,6 +1422,7 @@ async function resolveV2SessionExecutionDirectory(
     if (await homes.resolve(session) !== await homes.canonical(workspace.path)) return null;
     return nativeSessionDirectory(session);
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 }
@@ -3882,6 +3885,12 @@ function createRoutes(
     resolveWorkspace: (id) => resolveWorkspaceWithoutBootstrap(config, id),
     resolveSessionDirectory: (workspace, sessionId) => resolveV2SessionExecutionDirectory(config, engineV2Preview, workspace, sessionId),
     connection: () => engineV2Preview.connection() ?? null,
+  });
+
+  registerSessionFileRoutes({
+    routes,
+    resolveWorkspace: (id) => resolveWorkspaceWithoutBootstrap(config, id),
+    resolveSessionDirectory: (workspace, sessionId, signal) => resolveV2SessionExecutionDirectory(config, engineV2Preview, workspace, sessionId, signal),
   });
 
   registerFileRoutes({

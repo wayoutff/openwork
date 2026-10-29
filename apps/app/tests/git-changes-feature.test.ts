@@ -5,6 +5,8 @@ describe("local Git changes rollout", () => {
   test("requires an explicit local rollout", () => {
     expect(resolveLocalGitChanges(false, "http://127.0.0.1:4000", true, false)).toBe(false);
     expect(resolveLocalGitChanges(true, "http://127.0.0.1:4000", true, false)).toBe(true);
+    expect(resolveLocalGitChanges(false, "http://127.0.0.1:4000", true, false, "sessionFileBrowser")).toBe(false);
+    expect(resolveLocalGitChanges(true, "http://127.0.0.1:4000", true, false, "sessionFileBrowser")).toBe(true);
   });
   test("does not override managed or remote deployment policy", () => {
     expect(resolveLocalGitChanges(true, "http://127.0.0.1:4000", true, true)).toBe(false);

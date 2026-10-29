@@ -13,7 +13,7 @@ export function reconcileClosedBrowserPanel(sessionId: string): boolean {
   return (usePanelTabStore.getState().sessions[sessionId]?.tabs.length ?? 0) > 0;
 }
 
-export type PanelTabType = "artifact" | "browser" | "app" | "mcp-app" | "remote-thread" | "git-changes";
+export type PanelTabType = "artifact" | "browser" | "app" | "mcp-app" | "remote-thread" | "git-changes" | "files" | "session-file";
 
 export type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
 import type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
@@ -39,7 +39,16 @@ export function gitChangesPanelTab(workspaceId: string): GitChangesPanelTab {
   return { id: `git-changes:${workspaceId}`, type: "git-changes", label: "Git changes", workspaceId };
 }
 
-export type PanelTab = BrowserPanelTab | ArtifactPanelTab | AppPanelTab | McpAppPanelTab | RemoteThreadPanelTab | GitChangesPanelTab;
+export function filesPanelTab(): { id: string; type: "files"; label: string } {
+  return { id: "session-files", type: "files", label: "Files" };
+}
+
+export type SessionFilePanelTab = { id: string; type: "session-file"; label: string; path: string; directory: string; rootId: string; workspaceId: string };
+export function sessionFilePanelTab(workspaceId: string, directory: string, rootId: string, path: string): SessionFilePanelTab {
+  return { id: `session-file:${JSON.stringify([workspaceId, rootId, path])}`, type: "session-file", label: path.split("/").pop() ?? path, path, directory, rootId, workspaceId };
+}
+
+export type PanelTab = BrowserPanelTab | ArtifactPanelTab | AppPanelTab | McpAppPanelTab | RemoteThreadPanelTab | GitChangesPanelTab | ReturnType<typeof filesPanelTab> | SessionFilePanelTab;
 
 export type SessionPanelState = {
   tabs: PanelTab[];
@@ -172,6 +181,9 @@ function isSameTab(left: PanelTab, right: PanelTab) {
   if (left.type === "git-changes" && right.type === "git-changes") {
     return left.label === right.label && left.workspaceId === right.workspaceId;
   }
+
+  if (left.type === "files" && right.type === "files") return left.label === right.label;
+  if (left.type === "session-file" && right.type === "session-file") return left.path === right.path && left.rootId === right.rootId && left.workspaceId === right.workspaceId;
 
   if (left.type === "app" && right.type === "app") {
     return left.label === right.label && left.appId === right.appId && left.revisionId === right.revisionId && left.receiptId === right.receiptId;

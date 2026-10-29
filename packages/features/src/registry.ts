@@ -104,6 +104,17 @@ function defineFeatures<const T extends Record<string, FeatureDefinition>>(featu
 const everywhere = ["cloud", "self_hosted"] as const
 
 export const FEATURES = defineFeatures({
+  sessionFileBrowser: {
+    label: "Session file browser",
+    description: "Browse and preview files in the current conversation folder from a dedicated side tab.",
+    category: "experience",
+    added: "2026-10-29",
+    since: "2026-10",
+    author: "wayoutff",
+    docs: "docs/local-development.md",
+    deployments: everywhere,
+    default: false,
+  },
   gitChangesPanel: {
     label: "Git changes panel",
     description: "Review working tree and branch changes beside the chat with unified or split diffs.",
