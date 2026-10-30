@@ -11,13 +11,27 @@ enum HostTrust {
     /// The appId of every signed desktop distribution. Demo builds are unsigned.
     static let desktopIdentifier = "com.differentai.openwork"
 
+    /// A fork may pin its host in the helper's signed bundle, never in runtime env.
+    static func configuredDesktopIdentifier(_ info: [String: Any]) -> String? {
+        guard let configured = info["OpenWorkTrustedHostIdentifier"] else { return desktopIdentifier }
+        guard let identifier = configured as? String,
+              identifier.range(of: "^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$", options: .regularExpression) != nil else { return nil }
+        return identifier
+    }
+
+    static func isHostApplication(_ identifier: String, info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> Bool {
+        guard let host = configuredDesktopIdentifier(info) else { return true }
+        return identifier == host || identifier.hasPrefix(host + ".")
+    }
+
     static func embeddedHostIsTrusted() -> Bool {
         guard let signer = signingIdentity() else {
             // An unsigned helper cannot authenticate its host. Both MCP modes
             // require a signed peer; standalone mode is no bypass.
             return false
         }
-        let host = Responsibility.relaunched ? signer.identifier : desktopIdentifier
+        guard let configuredHost = configuredDesktopIdentifier(Bundle.main.infoDictionary ?? [:]) else { return false }
+        let host = Responsibility.relaunched ? signer.identifier : configuredHost
         return process(getppid(), isSignedAs: host, team: signer.team)
     }
 
@@ -40,6 +54,7 @@ enum HostTrust {
         var info: CFDictionary?
         guard SecCodeCopySelf([], &current) == errSecSuccess, let current,
               SecCodeCopyStaticCode(current, [], &code) == errSecSuccess, let code,
+              SecStaticCodeCheckValidity(code, [], nil) == errSecSuccess,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
               let values = info as? [String: Any],
               let team = values[kSecCodeInfoTeamIdentifier as String] as? String,

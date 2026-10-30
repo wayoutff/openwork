@@ -27,20 +27,22 @@ function fixture(options = {}) {
   let disconnect = () => {};
   /** @type {import("@openwork/computer-use/computer-control").ComputerAdapter} */
   const adapter = {
-    id: "local", label: "This computer", placement: "local",
+    id: options.id ?? "local", label: "This computer", placement: options.placement ?? "local",
     protocol: COMPUTER_PROTOCOL,
     setup: async () => ({ setupId: "setup" }),
     readiness: options.readiness ?? (async () => ({ readiness: "ready", detail: "Ready" })),
-    connect: async ({ onClose, onUi, background }) => {
+    connect: async ({ onClose, onUi, background, keepFront, signal }) => {
       calls.push("connect");
       options.connected?.push({ background: background === true });
+      options.keepFront?.push(keepFront);
+      await options.beforeConnect?.(signal);
       emit = onUi; disconnect = onClose;
       let paused = false;
       return {
-        callTool: async (name, args) => {
+        callTool: async (name, args, callOptions) => {
           calls.push(name);
           options.seen?.push({ name, args });
-          await options.beforeTool?.(name);
+          await options.beforeTool?.(name, callOptions?.signal);
           const replaced = options.toolResult?.(name);
           if (replaced) return replaced;
           if (name === "computer_open_session") {
@@ -551,7 +553,7 @@ function parallelFixture(options = {}) {
   const windows = { blender: 11, photoshop: 12, notes: 13 };
   /** @type {import("@openwork/computer-use/computer-control").ComputerAdapter} */
   const adapter = {
-    id: "local", label: "This Mac", placement: "local", parallel: true, protocol: COMPUTER_PROTOCOL,
+    id: options.id ?? "local", label: "This Mac", placement: "local", parallel: true, protocol: COMPUTER_PROTOCOL,
     setup: async () => ({ setupId: "setup" }),
     readiness: async () => ({ readiness: "ready", detail: "Ready" }),
     connect: async ({ onUi, onClose, background }) => {
@@ -694,6 +696,121 @@ test("chats on different computers no longer block each other", async (t) => {
   assert.equal(payload(await f.control.execute({ sessionId: "chat-vm", name: "computer_open", args: { app_id: "editor", mode: "control", purpose: "Edit" } })).ok, true);
   assert.equal(payload(await f.control.execute({ sessionId: "chat-other", name: "computer_open", args: { app_id: "editor", mode: "control", purpose: "Edit" } })).code, "computer_busy",
     "a computer that is not parallel still serves one chat");
+});
+
+test("keep-front defaults off, forwards strict booleans, and releases old Mac leases", async (t) => {
+  const keepFront = [];
+  const f = fixture({ id: "this-mac", keepFront }); t.after(() => f.control.reset(true));
+  await f.control.setFeatureEnabled(true);
+  await openApp(f.control, "chat", "editor");
+  assert.deepEqual(keepFront, [false]);
+  const revision = (await f.control.snapshot({ sessionId: "chat" })).revision;
+  assert.equal(await f.control.setKeepFrontEnabled(false), false);
+  assert.equal((await f.control.snapshot({ sessionId: "chat" })).revision, revision);
+  assert.ok(!f.calls.includes("close"));
+  assert.equal(await f.control.setKeepFrontEnabled(true), true);
+  assert.ok(f.calls.includes("close"));
+  assert.equal(payload(await click(f.control, "chat")).code, "observation_required");
+  assert.deepEqual(keepFront, [false, true]);
+  assert.ok(!f.calls.includes("computer_act"), "old observation cannot replay input into the new lease");
+  assert.equal(await f.control.setKeepFrontEnabled("true"), false);
+  await f.control.execute({ sessionId: "chat", name: "computer_observe", args: {} });
+  assert.deepEqual(keepFront, [false, true, false]);
+});
+
+test("keep-front cannot bypass the computer-use feature gate or model argument boundary", async (t) => {
+  const f = fixture({ id: "this-mac" }); t.after(() => f.control.reset(true));
+  await f.control.setKeepFrontEnabled(true);
+  assert.equal(payload(await openApp(f.control, "chat", "editor")).code, "computer_unavailable");
+  assert.deepEqual(f.calls, []);
+  await f.control.setFeatureEnabled(true);
+  const result = await f.control.execute({ sessionId: "chat", name: "computer_open", args: { app_id: "editor", mode: "control", purpose: "Edit", keepFront: true } });
+  assert.equal(result.isError, true);
+  assert.deepEqual(f.calls, []);
+});
+
+for (const phase of ["connect", "observe"]) test(`keep-front cancels an in-flight ${phase} before replacing its lease`, async (t) => {
+  const started = deferred(); const gate = deferred();
+  let signal;
+  const wait = async (active) => { signal = active; started.resolve(); await gate.promise; };
+  const f = fixture({ id: "this-mac", beforeConnect: phase === "connect" ? wait : undefined,
+    beforeTool: (name, active) => name === "computer_observe" && phase === "observe" ? wait(active) : undefined });
+  t.after(() => { gate.resolve(); return f.control.reset(true); });
+  await f.control.setFeatureEnabled(true);
+  const pending = phase === "connect" ? openApp(f.control, "chat", "editor")
+    : f.control.execute({ sessionId: "chat", name: "computer_discover", args: {} }).then(() => openApp(f.control, "chat", "editor"));
+  await started.promise;
+  const changed = f.control.setKeepFrontEnabled(true);
+  assert.equal(signal.aborted, true);
+  gate.resolve();
+  await changed;
+  const result = await pending;
+  assert.ok(result.isError || result.content.some((part) => part.type === "text" && JSON.parse(part.text).post_observation?.ok === false));
+  assert.ok(f.calls.includes("close"));
+  assert.ok(!f.calls.includes("computer_act"));
+});
+
+test("keep-front invalidates calls still checking readiness", async (t) => {
+  const started = deferred(); const gate = deferred();
+  const f = fixture({ id: "this-mac", readiness: async () => { started.resolve(); await gate.promise; return { readiness: "ready", detail: "Ready" }; } });
+  t.after(() => { gate.resolve(); return f.control.reset(true); });
+  await f.control.setFeatureEnabled(true);
+  const pending = openApp(f.control, "chat", "editor");
+  await started.promise;
+  await f.control.setKeepFrontEnabled(true);
+  gate.resolve();
+  assert.equal((await pending).isError, true);
+  assert.deepEqual(f.calls, []);
+});
+
+for (const [id, placement] of [["this-pc", "local"], ["vm", "remote"], ["this-mac", "remote"]]) test(`keep-front leaves ${placement} ${id} sessions untouched`, async (t) => {
+  const keepFront = [];
+  const f = fixture({ id, placement, keepFront, authority: async () => true }); t.after(() => f.control.reset(true));
+  await f.control.setFeatureEnabled(true);
+  await f.control.setRemoteEnabled(true);
+  await openApp(f.control, "chat", "editor");
+  const revision = (await f.control.snapshot({ sessionId: "chat" })).revision;
+  await f.control.setKeepFrontEnabled(true);
+  await f.control.setKeepFrontEnabled(false);
+  assert.equal((await f.control.snapshot({ sessionId: "chat" })).revision, revision);
+  assert.deepEqual(keepFront, [false]);
+  assert.ok(!f.calls.includes("close"));
+});
+
+test("keep-front preserves takeover through cleanup and Stop until the next turn", async (t) => {
+  const f = fixture({ id: "this-mac" }); t.after(() => f.control.reset(true));
+  await f.control.setFeatureEnabled(true);
+  await openApp(f.control, "chat", "editor");
+  await f.control.interact({ sessionId: "chat", id: "view", action: "takeover" });
+  await f.control.setKeepFrontEnabled(true);
+  assert.equal((await f.control.snapshot({ sessionId: "chat" })).session.state, "paused");
+  assert.equal(payload(await click(f.control, "chat")).code, "session_paused");
+  assert.equal(payload(await openApp(f.control, "other", "editor")).code, "computer_busy");
+  await f.control.interact({ sessionId: "chat", id: "view", action: "resume" });
+  await f.control.execute({ sessionId: "chat", name: "computer_observe", args: {} });
+  await f.control.halt({ sessionId: "chat" });
+  await f.control.setKeepFrontEnabled(false);
+  assert.equal(payload(await openApp(f.control, "chat", "editor")).code, "not_allowed");
+});
+
+test("keep-front does not relax another chat's window ownership", async (t) => {
+  const f = parallelFixture({ id: "this-mac" }); t.after(() => f.control.reset(true));
+  await f.control.setFeatureEnabled(true);
+  await f.control.setKeepFrontEnabled(true);
+  await openApp(f.control, "owner", "blender");
+  assert.equal(payload(await openApp(f.control, "other", "blender", "control", 11)).code, "window_busy");
+  assert.equal(f.connections(), 1);
+});
+
+test("keep-front reports unconfirmed release and retains the old reservation", async (t) => {
+  let fail = true;
+  const f = fixture({ id: "this-mac", beforeClose: () => { if (fail) throw new Error("Still running"); } });
+  t.after(() => { fail = false; return f.control.reset(true); });
+  await f.control.setFeatureEnabled(true);
+  await openApp(f.control, "chat", "editor");
+  await assert.rejects(f.control.setKeepFrontEnabled(true), /revocation could not be confirmed/);
+  assert.equal((await f.control.snapshot({ sessionId: "chat" })).cleanupPending, true);
+  assert.equal(payload(await openApp(f.control, "other", "editor")).code, "computer_busy");
 });
 
 test("background sessions act at the same time instead of taking turns", async (t) => {

@@ -104,6 +104,28 @@ function defineFeatures<const T extends Record<string, FeatureDefinition>>(featu
 const everywhere = ["cloud", "self_hosted"] as const
 
 export const FEATURES = defineFeatures({
+  computerKeepFront: {
+    label: "Keep agent window in front",
+    description: "Allow an opt-in preference to leave the foreground computer-use window active between steps without locking focus.",
+    category: "experience",
+    added: "2026-10-30",
+    since: "2026-10",
+    author: "wayoutff",
+    docs: "docs/plans/local-computer-use.md",
+    deployments: everywhere,
+    default: false,
+  },
+  localComputerUse: {
+    label: "Local Computer Use",
+    description: "Opt in to Computer Use in an isolated signed local developer profile without a cloud account.",
+    category: "experience",
+    added: "2026-10-30",
+    since: "2026-10",
+    author: "wayoutff",
+    docs: "docs/plans/local-computer-use.md",
+    deployments: everywhere,
+    default: false,
+  },
   sessionFileBrowser: {
     label: "Session file browser",
     description: "Browse and preview files in the current conversation folder from a dedicated side tab.",

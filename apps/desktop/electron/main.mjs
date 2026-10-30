@@ -219,9 +219,16 @@ const computerTargetsPath = () => path.join(app.getPath("userData"), "computer-u
 // The System Settings entry macOS lists for computer use: the helper's own
 // bundle, which takes responsibility for itself so grants never restart OpenWork.
 let computerPermissionEntry = null;
-const computerHelperBundle = () => [process.resourcesPath, path.resolve(__dirname, "..", "resources")]
+const computerHelperBundle = () => {
+  const explicit = !app.isPackaged && process.env.OPENWORK_COMPUTER_USE_BINARY?.trim();
+  if (explicit && path.basename(explicit) === "ComputerUse") {
+    const bundle = path.resolve(explicit, "../../..");
+    if (bundle.endsWith(".app") && existsSync(path.join(bundle, "Contents", "Info.plist"))) return bundle;
+  }
+  return [process.resourcesPath, path.resolve(__dirname, "..", "resources")]
   .map((root) => root && path.join(root, "helpers", "OpenWork Computer Use.app"))
   .find((candidate) => candidate && existsSync(candidate)) ?? null;
+};
 const readComputerPermissionEntry = () => (computerPermissionEntry ??= resolvePermissionEntry({ helperBundle: computerHelperBundle(), fallbackName: APP_NAME })
   .catch(() => ({ name: APP_NAME, bundleId: null, ours: false })));
 const computerControl = createComputerControl({
@@ -2090,6 +2097,13 @@ const desktopCommandHandlers = {
       assertComputerSender(event);
       return computerControl.setFeatureEnabled(enabled === true);
   },
+  "computerLocalProfile": async (event) => {
+      assertComputerSender(event);
+      return !app.isPackaged && process.platform === "darwin"
+        && APP_IDENTIFIER === "dev.openwork.local"
+        && process.env.OPENWORK_LOCAL_COMPUTER_USE === "1"
+        && !DESKTOP_DISTRIBUTION.requireSignin && !DESKTOP_DISTRIBUTION.requireActivation;
+  },
   "computerSetRemoteEnabled": async (event, enabled) => {
       assertComputerSender(event);
       return computerControl.setRemoteEnabled(enabled === true);
@@ -2097,6 +2111,10 @@ const desktopCommandHandlers = {
   "computerSetBackgroundEnabled": async (event, enabled) => {
       assertComputerSender(event);
       return computerControl.setBackgroundEnabled(enabled === true);
+  },
+  "computerSetKeepFrontEnabled": async (event, enabled) => {
+      assertComputerSender(event);
+      return computerControl.setKeepFrontEnabled(enabled === true);
   },
   "computerResetPermission": async (event, permission) => {
       assertComputerSender(event);

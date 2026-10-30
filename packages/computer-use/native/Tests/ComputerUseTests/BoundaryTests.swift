@@ -4,6 +4,19 @@ import ApplicationServices
 @testable import ComputerUse
 
 final class BoundaryTests: XCTestCase {
+    func testSignedBundleHostConfigurationIsExplicitAndFailClosed() {
+        XCTAssertEqual(HostTrust.configuredDesktopIdentifier([:]), HostTrust.desktopIdentifier)
+        XCTAssertEqual(HostTrust.configuredDesktopIdentifier(["OpenWorkTrustedHostIdentifier": "dev.openwork.local"]), "dev.openwork.local")
+        for value in ["", "*", "bad\" or anchor apple", "test\n.app"] {
+            XCTAssertNil(HostTrust.configuredDesktopIdentifier(["OpenWorkTrustedHostIdentifier": value]))
+        }
+        XCTAssertNil(HostTrust.configuredDesktopIdentifier(["OpenWorkTrustedHostIdentifier": 12]))
+        let info: [String: Any] = ["OpenWorkTrustedHostIdentifier": "dev.openwork.local"]
+        XCTAssertTrue(HostTrust.isHostApplication("dev.openwork.local", info: info))
+        XCTAssertTrue(HostTrust.isHostApplication("dev.openwork.local.computer-use", info: info))
+        XCTAssertFalse(HostTrust.isHostApplication("dev.openwork.localother", info: info))
+        XCTAssertTrue(HostTrust.isHostApplication("any.app", info: ["OpenWorkTrustedHostIdentifier": ""]))
+    }
     func testUnsignedHelperCannotTrustAParentAsItsControlHost() {
         // SwiftPM's unsigned test process cannot authenticate an embedded host,
         // including when compiled with the former development bypass flag.

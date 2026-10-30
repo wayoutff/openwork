@@ -5,6 +5,8 @@ import type { ComputerPermission, ComputerStatus } from "@openwork/types/desktop
 import { desktopBridge } from "@/app/lib/desktop";
 import { isElectronRuntime, isMacPlatform } from "@/app/utils";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { useLocal } from "@/react-app/kernel/local-provider";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useDesktopFeature } from "../../session/status/use-desktop-feature";
@@ -52,6 +54,8 @@ function statusLabel(readiness: ComputerStatus["readiness"]) {
  */
 export function ComputerUseView() {
   const enabled = useDesktopFeature("computerUse") && isElectronRuntime();
+  const keepFrontAvailable = useDesktopFeature("computerKeepFront");
+  const { prefs, setPrefs } = useLocal();
   const [status, setStatus] = useState<ComputerStatus | null>(null);
   const [readError, setReadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -151,6 +155,19 @@ export function ComputerUseView() {
 
   return (
     <LayoutStack>
+      {isMacPlatform() ? <LayoutSection>
+        <LayoutSectionItem>
+          <LayoutSectionItemHeader>
+            <LayoutSectionItemTitle><span title="Leaves the target window active between steps, without locking focus. Your input, Take over and Stop still interrupt control. Changing this setting ends the current native session.">Keep agent window in front{!keepFrontAvailable ? " · Disabled by deployment" : ""}</span></LayoutSectionItemTitle>
+            <LayoutSectionItemHeaderActions>
+              <Switch data-testid="computer-keep-front" aria-label="Keep agent window in front"
+                disabled={!keepFrontAvailable}
+                checked={prefs.featureFlags?.computerKeepFront === true}
+                onCheckedChange={(checked) => setPrefs(previous => ({ ...previous, featureFlags: { ...previous.featureFlags, computerKeepFront: checked } }))} />
+            </LayoutSectionItemHeaderActions>
+          </LayoutSectionItemHeader>
+        </LayoutSectionItem>
+      </LayoutSection> : null}
       <LayoutSection>
         <LayoutSectionHeader>
           <LayoutSectionTitle>Setup</LayoutSectionTitle>

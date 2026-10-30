@@ -703,7 +703,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
 }
 
 export function AdvancedWorkspaceRunModeSection() {
-  const { workspaceRunModeEnabled, toggleWorkspaceRunMode, gitChangesPanelEnabled, toggleGitChangesPanel, sessionFileBrowserEnabled, toggleSessionFileBrowser } = useFeatureFlagsPreferences();
+  const { workspaceRunModeEnabled, toggleWorkspaceRunMode, gitChangesPanelEnabled, toggleGitChangesPanel, sessionFileBrowserEnabled, toggleSessionFileBrowser, localComputerUseEnabled, toggleLocalComputerUse } = useFeatureFlagsPreferences();
   const restricted = useDesktopRestriction("allowControlSettings");
   return (
     <LayoutSection id="advanced-workspace-run-mode">
@@ -752,6 +752,15 @@ export function AdvancedWorkspaceRunModeSection() {
           <LayoutSectionItemDescription>Browse and preview files in the current conversation folder.</LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             <Switch data-testid="session-file-browser-flag" aria-label="File browser" checked={sessionFileBrowserEnabled} disabled={restricted || !isDesktopRuntime()} onCheckedChange={toggleSessionFileBrowser} />
+          </LayoutSectionItemHeaderActions>
+        </LayoutSectionItemHeader>
+      </LayoutSectionItem>
+      <LayoutSectionItem>
+        <LayoutSectionItemHeader>
+          <LayoutSectionItemTitle>Local Computer Use</LayoutSectionItemTitle>
+          <LayoutSectionItemDescription>Enable only in the signed OpenWork Local profile. macOS permissions are separate. Screenshots and UI observations may be sent to your selected AI provider. Remote and background computers remain off.</LayoutSectionItemDescription>
+          <LayoutSectionItemHeaderActions>
+            <Switch data-testid="local-computer-use-flag" aria-label="Local Computer Use" checked={localComputerUseEnabled} disabled={restricted || !isDesktopRuntime()} onCheckedChange={toggleLocalComputerUse} />
           </LayoutSectionItemHeaderActions>
         </LayoutSectionItemHeader>
       </LayoutSectionItem>

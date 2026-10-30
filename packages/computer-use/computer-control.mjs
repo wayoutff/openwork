@@ -96,7 +96,7 @@ function deadline(ms) {
  *   readiness: () => Promise<{ readiness: string, detail: string, permissions?: { accessibility: boolean, screenRecording: boolean } }>,
  *   setup?: (permission: "accessibility" | "screenRecording") => Promise<{ setupId: string }>,
  *   dismissSetup?: (setupId?: string) => Promise<void>,
- *   connect: (options: { signal: AbortSignal, presence: { name: string, color: string } | null, background?: boolean, onUi: (value: unknown) => void, onClose: () => void }) => Promise<ComputerTransport>,
+ *   connect: (options: { signal: AbortSignal, presence: { name: string, color: string } | null, background?: boolean, keepFront?: boolean, onUi: (value: unknown) => void, onClose: () => void }) => Promise<ComputerTransport>,
  * }} ComputerAdapter
  */
 
@@ -160,6 +160,10 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
   let featureEnabled = false;
   // `computerUseBackground`: new sessions on a parallel computer work behind other windows.
   let backgroundEnabled = false;
+  // `computerKeepFront`: host policy for the local Mac helper only.
+  let keepFrontEnabled = false;
+  let keepFrontGeneration = 0;
+  const supportsKeepFront = (target) => target.id === "this-mac" && target.placement === "local";
   let featureGeneration = 0;
   let remoteGeneration = 0;
   let remoteUpdateRevision = 0;
@@ -669,7 +673,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
       if (Number.isSafeInteger(window) && others.some((other) => other.windowId === window)) {
         return failure("window_busy", "Another chat is working in this window. Choose another window, or wait for that chat to finish. Nothing was dispatched.");
       }
-      if (!own) leases.set(grant.sessionId, { grant, adapter: target, background: backgroundEnabled && target.parallel === true, controller: new AbortController(), nativeId: null, session: null, busy: false, handoffGeneration: 0 });
+      if (!own) leases.set(grant.sessionId, { grant, adapter: target, background: backgroundEnabled && target.parallel === true, keepFront: keepFrontEnabled && supportsKeepFront(target), controller: new AbortController(), nativeId: null, session: null, busy: false, handoffGeneration: 0 });
       const current = leases.get(grant.sessionId);
       clearTimeout(current.idleTimer);
       current.busy = true;
@@ -705,6 +709,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
             current.transport = await current.adapter.connect({
               signal: active, presence,
               background: current.background,
+              keepFront: current.keepFront,
               onUi: (value) => receiveUi(current, value),
               onClose: () => {
                 clearPresentation(current); current.uiEnded = true;
@@ -1117,6 +1122,18 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
       await Promise.all([...leases.values()].filter((current) => current.background !== (backgroundEnabled && current.adapter.parallel === true)).map((current) => release(current, true)));
       return backgroundEnabled;
     },
+    /** Change host focus policy without continuing a handoff or clearing Stop. */
+    async setKeepFrontEnabled(enabled) {
+      if (keepFrontEnabled === (enabled === true)) return keepFrontEnabled;
+      keepFrontEnabled = enabled === true;
+      keepFrontGeneration++;
+      // Invalidate even calls still probing readiness or waiting for a turn.
+      for (const grant of grants.values()) if (supportsKeepFront(targetFor(grant))) advance(grant);
+      const running = [...leases.values()].filter((current) => current.keepFront !== (keepFrontEnabled && supportsKeepFront(current.adapter)));
+      for (const current of running) current.expectedClose = true;
+      if ((await Promise.all(running.map(cleanup))).includes(false)) throw new Error(COMPUTER_STOP_GUIDANCE);
+      return keepFrontEnabled;
+    },
     /**
      * The renderer reports the `remoteComputers` feature. Turning it off ends a
      * session running on a VM at once; each chat keeps its saved choice and
@@ -1283,6 +1300,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
         if (!featureEnabled) return failure("computer_unavailable", "Computer use is not turned on in this OpenWork app. Use connected apps or the browser instead.");
         const generation = featureGeneration;
         const remoteRevision = remoteGeneration;
+        const keepFrontRevision = keepFrontGeneration;
         const grant = await grantFor(sessionId);
         if (targetFor(grant).placement === "remote" && !await readRemoteFeatureEnabled().catch(() => false)) {
           await api.setRemoteEnabled(false);
@@ -1300,6 +1318,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
           if (answer !== "ready") return setupNotFinished(answer);
         }
         if (!featureEnabled || generation !== featureGeneration || grant.adapter.placement === "remote" && remoteRevision !== remoteGeneration) return failure("computer_unavailable", "Computer use was turned off while this request was waiting. Nothing was dispatched.");
+        if (supportsKeepFront(targetFor(grant)) && keepFrontRevision !== keepFrontGeneration) return failure("operation_interrupted", "Computer focus policy changed while this request was waiting. Nothing was dispatched.");
         if (args.screenshot !== undefined && typeof args.screenshot !== "boolean") return failure("invalid_arguments", "screenshot must be true or false.");
         // screenshot:false returns the settled elements without an image; the native call never sees it.
         const { screenshot, ...nativeArgs } = args;

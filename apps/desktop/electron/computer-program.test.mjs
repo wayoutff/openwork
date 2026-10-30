@@ -129,6 +129,267 @@ test("native partial receipts survive a failed program without replay", async ()
   assert.deepEqual(result.receipts,[{index:0,status:"partial",completed:0,failed:0,skipped:0}]);
 });
 
+const nativeText = value => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
+// Synthetic native BatchProgress receipt; desktop changes alone do not imply input.
+const nativeStale = (action = "press") => ({
+  ok: false, status: "failed", code: "stale_observation", next: "observe",
+  completed: 0, failed_step: 0, may_have_acted: false,
+  steps: [{ action, index: 0, status: "skipped", code: "stale_observation" }],
+  desktop: { front_app_changed: true },
+});
+function computerFixture({ respond = () => nativeText({ ok: true, status: "dispatched", completed: 1 }), elements, observe } = {}) {
+  const calls = [], inputs = [];
+  let observations = 0;
+  const host = {
+    browser: async () => { throw new Error("Wrong surface"); },
+    computer: async (name, args, signal) => {
+      calls.push({ name, args });
+      if (name === "computer_observe") {
+        observations++;
+        const view = { ok: true, mode: "control", observation_id: `view-${observations}`, width: 800, height: 600, ...(args.include_image ? {image:{included:true,width:800,height:600}} : {}), elements: elements?.(observations) ?? [
+          { ref: `save-${observations}`, role: "AXButton", name: "Save", actions: ["press"], bounds: { x: 10, y: 20, width: 100, height: 30 } },
+          { ref: `title-${observations}`, role: "AXTextField", name: "Title", settable: true, actions: ["press"], bounds: { x: 10, y: 70, width: 200, height: 30 } },
+        ] };
+        return observe ? observe(view, args) : { content: [...nativeText(view).content, ...(args.include_image ? [{type:"image",data:"synthetic",mimeType:"image/png"}] : [])] };
+      }
+      assert.equal(name, "computer_act");
+      assert.equal(args.observation_id, `view-${observations}`);
+      inputs.push(args.action);
+      return respond(args.action, inputs.length, signal);
+    },
+  };
+  return { host, calls, inputs, run: (code, signal = new AbortController().signal) => runComputerProgram({ surface: "computer", code }, host, signal) };
+}
+
+test("native atomic semantic actions re-observe text and reselect changed refs", async () => {
+  for (const [type, code, prefix] of [
+    ["press", 'await tools.ui.click({target:{role:"button",name:"Save"}}); return true;', "save"],
+    ["set_value", 'await tools.ui.fill({target:{role:"textbox",text:"Title",exact:true},text:"Report"}); return true;', "title"],
+  ]) {
+    const f = computerFixture({
+      respond: (_, attempt) => nativeText(attempt === 1 ? nativeStale(type) : { ok: true, status: "dispatched", completed: 1 }),
+      observe: (view, args) => args.include_image ? nativeText({ ok: false, code: "privacy_incomplete" }) : nativeText(view),
+    });
+    const result = await f.run(code);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(f.inputs.map(action => [action.type, action.ref]), [[type, `${prefix}-1`], [type, `${prefix}-2`]]);
+    assert.deepEqual(result.receipts.map(receipt => receipt.status), ["failed", "dispatched"]);
+    assert.equal(result.metrics.observations, 2);
+    assert.equal(result.mayHaveActed, true);
+    assert.deepEqual(result.images, []);
+  }
+});
+
+test("native stale recovery exhausts after two refreshes", async () => {
+  const f = computerFixture({ respond: () => nativeText(nativeStale()) });
+  const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "stale_observation");
+  assert.deepEqual(f.inputs.map(action => action.ref), ["save-1", "save-2", "save-3"]);
+  assert.equal(result.metrics.observations, 3);
+  assert.equal(result.mayHaveActed, true);
+});
+
+test("native setChecked never replays a toggle after state changes during stale refusal", async () => {
+  let checked = false;
+  const f = computerFixture({
+    elements: () => [{ref:"check",role:"checkbox",name:"Enable option",press:true,checked}],
+    respond: action => { checked = true; return nativeText(nativeStale(action.type)); },
+  });
+  const result = await f.run('await tools.ui.setChecked({target:{role:"checkbox",name:"Enable option"},checked:true});');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "stale_observation");
+  assert.equal(f.inputs.length, 1);
+  assert.equal(checked, true);
+});
+
+test("native recovery requires the entire strict no-input receipt", async () => {
+  const malformed = [
+    { ok: true }, { status: undefined }, { status: "partial" }, { status: "dispatched" },
+    { completed: undefined }, { completed: "0" }, { completed: 1 },
+    { failed_step: undefined }, { failed_step: 1 }, { may_have_acted: undefined }, { may_have_acted: true },
+    { code: "person_interacting" }, { next: "human_takeover" }, { next: undefined }, { dispatched: true },
+    { steps: undefined }, { steps: [] }, { steps: [{}] },
+    { steps: [{ ...nativeStale().steps[0], index: 1 }] },
+    { steps: [{ ...nativeStale().steps[0], action: "set_value" }] },
+    { steps: [{ ...nativeStale().steps[0], status: "uncertain" }] },
+    { steps: [{ ...nativeStale().steps[0], status: "dispatched" }] },
+    { steps: [{ ...nativeStale().steps[0], code: "person_interacting" }] },
+    { steps: [{ ...nativeStale().steps[0], path: "accessibility" }] },
+    { steps: [{ ...nativeStale().steps[0], may_have_acted: true }] },
+    { steps: [...nativeStale().steps, { action: "press", index: 1, status: "dispatched" }] },
+    { steps: [...nativeStale().steps, { action: "press", index: 1, status: "skipped" }] },
+    { failed_phase: "after_dispatch" }, { post_observation: { ok: false, code: "privacy_incomplete" } },
+  ];
+  for (const patch of malformed) {
+    const f = computerFixture({ respond: () => nativeText({ ...nativeStale(), ...patch }) });
+    const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});');
+    assert.equal(result.ok, false, JSON.stringify(patch));
+    assert.equal(f.inputs.length, 1, JSON.stringify(patch));
+    assert.equal(result.mayHaveActed, true);
+  }
+  for (const response of [
+    {}, { content: [{ type: "text", text: "unreadable receipt" }] },
+    { content: [...nativeText(nativeStale()).content, ...nativeText({ ok: true, status: "dispatched" }).content] },
+    { content: [...nativeText(nativeStale()).content, { type: "text", text: "unreadable extra receipt" }] },
+  ]) {
+    const f = computerFixture({ respond: () => response });
+    const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});');
+    assert.equal(f.inputs.length, 1);
+    assert.equal(result.mayHaveActed, true);
+  }
+});
+
+test("native recovery excludes weak selectors, nth, raw refs, keys, typing, coordinates and scroll", async () => {
+  for (const code of [
+    'await tools.ui.click({target:{name:"Save"}});',
+    'await tools.ui.click({target:{role:"button"}});',
+    'await tools.ui.click({target:{role:"button",name:"Save",nth:0}});',
+    'await tools.ui.click({target:{role:"button",name:"Save",exact:false}});',
+    'await tools.ui.fill({target:{role:"textbox",name:"Title",nth:0},text:"Report"});',
+    'await tools.ui.act({action:{type:"press",ref:"save-1"}});',
+    'await tools.ui.act({action:{type:"set_value",ref:"title-1",text:"Report"}});',
+    'await tools.ui.key({key:"enter"});',
+    'await tools.ui.act({action:{type:"type",text:"Report"}});',
+    'await tools.ui.act({action:{type:"click",x:20,y:30}});',
+    'await tools.ui.scroll({direction:"down"});',
+  ]) {
+    const f = computerFixture({ respond: action => nativeText(nativeStale(action.type)) });
+    const result = await f.run(code);
+    assert.equal(result.ok, false, code);
+    assert.equal(f.inputs.length, 1, code);
+  }
+});
+
+test("native coordinate fallback never retries or switches back to semantic input", async () => {
+  const f = computerFixture({
+    elements: generation => [{ ref: `save-${generation}`, role: "button", name: "Save", bounds: { x: 10, y: 10, width: 100, height: 30 } }],
+    respond: () => nativeText(nativeStale("click")),
+  });
+  assert.equal((await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});')).ok, false);
+  assert.deepEqual(f.inputs, [{ type: "click", x: 60, y: 25 }]);
+});
+
+test("Button role without press never silently clicks in assist mode", async () => {
+  const f = computerFixture({
+    elements: () => [{ref:"tab",role:"Button",name:"Example tab",x:20,y:30,w:100,h:25}],
+    observe: view => nativeText({...view,mode:"assist"}),
+  });
+  const result = await f.run('await tools.ui.click({target:{role:"Button",name:"Example tab"}});');
+  assert.equal(result.error.code, "control_mode_required");
+  assert.equal(result.metrics.actions, 0);
+  assert.equal(result.mayHaveActed, false);
+  assert.equal(f.inputs.length, 0);
+  assert.equal(f.calls.length, 1);
+});
+
+test("coordinate fallback and scroll require an actual usable screenshot", async () => {
+  for (const code of ['await tools.ui.click({target:{role:"Button",name:"Example tab"}});', 'await tools.ui.scroll({direction:"down"});']) {
+    for (const [image, expected] of [
+      [{included:false,unavailable:{code:"privacy_incomplete"}}, "privacy_incomplete"],
+      [{included:true,width:800,height:600}, "image_required"],
+    ]) {
+      const f = computerFixture({
+        elements: () => [{ref:"tab",role:"Button",name:"Example tab",x:20,y:30,w:100,h:25}],
+        observe: view => nativeText({...view, image}),
+      });
+      const result = await f.run(code);
+      assert.equal(result.error.code, expected);
+      assert.equal(result.mayHaveActed, false);
+      assert.equal(f.inputs.length, 0);
+    }
+  }
+});
+
+test("assist mode still permits genuine semantic press without a screenshot", async () => {
+  const f = computerFixture({observe: view => nativeText({...view,mode:"assist",image:{included:false,unavailable:{code:"privacy_incomplete"}}})});
+  assert.equal((await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});')).ok, true);
+  assert.equal(f.inputs[0].type, "press");
+});
+
+test("native reselect fails closed for missing, ambiguous, disabled or changed capabilities", async () => {
+  for (const change of [() => [], node => [node, { ...node, ref: "other" }], node => [{ ...node, disabled: true }], node => [{ ...node, press: false }]]) {
+    const f = computerFixture({
+      elements: generation => {
+        const node = { ref: `save-${generation}`, role: "button", name: "Save", press: true };
+        return generation === 1 ? [node] : change(node);
+      },
+      respond: () => nativeText(nativeStale()),
+    });
+    assert.equal((await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});')).ok, false);
+    assert.equal(f.inputs.length, 1);
+  }
+});
+
+test("native multi-action fills never replay earlier input", async () => {
+  for (const [append, failedType, expected] of [[false, "key", ["press", "key"]], [false, "type", ["press", "key", "type"]], [true, "type", ["press", "type"]]]) {
+    const f = computerFixture({
+      elements: generation => [{ ref: `title-${generation}`, role: "textbox", name: "Title", press: true }],
+      respond: action => nativeText(action.type === failedType ? nativeStale(action.type) : { ok: true, status: "dispatched" }),
+    });
+    assert.equal((await f.run(`await tools.ui.fill({target:{role:"textbox",name:"Title"},text:"Report",append:${append}});`)).ok, false);
+    assert.deepEqual(f.inputs.map(action => action.type), expected);
+  }
+});
+
+test("native fillForm recovery retries only the refused atomic field", async () => {
+  const f = computerFixture({ respond: (_, attempt) => nativeText(attempt === 2 ? nativeStale("set_value") : { ok: true, status: "dispatched" }) });
+  const result = await f.run('await tools.ui.fillForm({fields:[{target:{role:"textbox",name:"Title"},text:"First"},{target:{role:"textbox",name:"Title"},text:"Second"}]});');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(f.inputs.map(action => action.text), ["First", "Second", "Second"]);
+  assert.deepEqual(f.inputs.map(action => action.ref), ["title-1", "title-2", "title-3"]);
+});
+
+test("native transport uncertainty, failed post-observation and failed refresh never replay", async () => {
+  for (const respond of [
+    () => { throw new Error("Receipt lost"); },
+    () => nativeText({ ok: true, status: "dispatched", post_observation: { ok: false, code: "privacy_incomplete" } }),
+    () => nativeText({ ...nativeStale(), status: "partial", completed: 1, may_have_acted: true }),
+  ]) {
+    const f = computerFixture({ respond });
+    const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});');
+    assert.equal(result.ok, false);
+    assert.equal(result.mayHaveActed, true);
+    assert.equal(f.inputs.length, 1);
+  }
+  const f = computerFixture({ respond: () => nativeText(nativeStale()), observe: view => nativeText(view.observation_id === "view-1" ? view : { ok: false, code: "privacy_incomplete" }) });
+  const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "privacy_incomplete");
+  assert.equal(f.inputs.length, 1);
+});
+
+test("a recovered native action with a broker post-observation failure is not repeated", async () => {
+  const f = computerFixture({ respond: (_, attempt) => attempt === 1 ? nativeText(nativeStale()) : {
+    content: [
+      ...nativeText({ ok: true, status: "dispatched", completed: 1 }).content,
+      ...nativeText({ post_observation: { ok: false, code: "privacy_incomplete" }, actions_replayed: false, next: "observe" }).content,
+    ],
+  } });
+  const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});');
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "post_observation_failed");
+  assert.equal(result.mayHaveActed, true);
+  assert.equal(f.inputs.length, 2);
+  assert.deepEqual(result.receipts.map(receipt => receipt.status), ["failed", "dispatched"]);
+});
+
+test("Stop during native stale recovery prevents all further dispatch", async () => {
+  for (const duringBackoff of [false, true]) {
+    const controller = new AbortController();
+    const f = computerFixture({ respond: () => {
+      if (duringBackoff) setTimeout(() => controller.abort(), 10);
+      else controller.abort();
+      return nativeText(nativeStale());
+    } });
+    const result = await f.run('await tools.ui.click({target:{role:"button",name:"Save"}});', controller.signal);
+    assert.equal(result.ok, false);
+    assert.equal(f.inputs.length, 1);
+    assert.equal(f.calls.length, 2);
+    assert.equal(result.mayHaveActed, true);
+  }
+});
+
 test("code has no ambient filesystem, process or network access", async () => {
   for (const code of ['return process.env;', 'return require("node:fs");', 'return await fetch("https://example.com");']) {
     const f = browserFixture();
