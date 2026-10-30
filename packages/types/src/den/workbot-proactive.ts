@@ -68,9 +68,12 @@ export const AGENT_SOURCE_POLICY_COPY: Record<AgentSourcePolicy, string> = {
 const agentSourceIdSchema = z.string().trim().min(1).max(64)
 const AGENT_SOURCE_CONNECTIONS_MAX = 200
 const AGENT_CORE_CONNECTIONS_MAX = 50
-
-/** The connections an admin picked for one core source: at least one (turning the source off is its policy). */
-const agentCoreConnectionIdsSchema = z.array(agentSourceIdSchema).min(1).max(AGENT_CORE_CONNECTIONS_MAX)
+/** The connections an admin picked for one core source; empty reads nothing (turning it off is its policy). */
+const agentCoreConnectionIdsSchema = z.array(agentSourceIdSchema).max(AGENT_CORE_CONNECTIONS_MAX)
+/** The connections an admin added to Other context. */
+const agentOtherConnectionIdsSchema = z.array(agentSourceIdSchema).max(AGENT_SOURCE_CONNECTIONS_MAX)
+const tooManyConnections = { message: "Too many connections." }
+const withinConnectionLimit = (value: Record<string, unknown>) => Object.keys(value).length <= AGENT_SOURCE_CONNECTIONS_MAX
 
 /**
  * The organization's policy per source. Calendar, email and team chat are on for everyone by default; every other
@@ -81,25 +84,38 @@ export const agentSourcesPolicySchema = z.object({
   email: agentSourcePolicySchema,
   chat: agentSourcePolicySchema,
   /**
-   * Which of the organization's connections serve calendar, email and team chat, by id. A source that isn't listed
-   * reads through every connection that can serve it (Google Workspace, Microsoft 365, Slack).
+   * Which of the organization's connections serve calendar, email and team chat, by id: Den's own providers for what
+   * they serve, or an MCP connection whose read tools we reviewed. A source that isn't listed reads through every
+   * connection that can serve it (Google Workspace, Microsoft 365, Slack); an empty list reads nothing.
    */
   coreConnections: z.object({
     calendar: agentCoreConnectionIdsSchema.optional(),
     email: agentCoreConnectionIdsSchema.optional(),
     chat: agentCoreConnectionIdsSchema.optional(),
   }).optional(),
+  /**
+   * The admin's default connection per core source, by id: what a member's agent reads when the member hasn't picked
+   * one of the allowed connections and their account on it is ready. Absent (or no longer allowed): automatic, the
+   * allowed connection most members already connected.
+   */
+  coreDefaults: z.object({
+    calendar: agentSourceIdSchema.optional(),
+    email: agentSourceIdSchema.optional(),
+    chat: agentSourceIdSchema.optional(),
+  }).optional(),
+  /** The connections in Other context, by id. Absent: every connection whose read tools we reviewed. */
+  otherConnections: agentOtherConnectionIdsSchema.optional(),
   /** Other connections by id; one that isn't listed is up to members. */
-  connections: z.record(agentSourceIdSchema, agentSourcePolicySchema)
-    .refine((value) => Object.keys(value).length <= AGENT_SOURCE_CONNECTIONS_MAX, { message: "Too many connections." }),
+  connections: z.record(agentSourceIdSchema, agentSourcePolicySchema).refine(withinConnectionLimit, tooManyConnections),
 })
 export type AgentSourcesPolicy = z.infer<typeof agentSourcesPolicySchema>
 
 export const DEFAULT_AGENT_SOURCES_POLICY: AgentSourcesPolicy = { calendar: "everyone", email: "everyone", chat: "everyone", connections: {} }
 
 /**
- * An admin's change: any core source, the connections behind a core source (null goes back to every connection that
- * serves it), and other connections by id (null goes back to "members choose").
+ * An admin's change: any core source, the connections allowed behind a core source (null goes back to every connection
+ * that serves it), its default connection (null goes back to automatic), the connections in Other context (null goes
+ * back to every reviewed one), and other connections by id (null goes back to "members choose").
  */
 export const agentSourcesPolicyInputSchema = z
   .object({
@@ -111,9 +127,13 @@ export const agentSourcesPolicyInputSchema = z
       email: agentCoreConnectionIdsSchema.nullable().optional(),
       chat: agentCoreConnectionIdsSchema.nullable().optional(),
     }).strict().optional(),
-    connections: z.record(agentSourceIdSchema, agentSourcePolicySchema.nullable())
-      .refine((value) => Object.keys(value).length <= AGENT_SOURCE_CONNECTIONS_MAX, { message: "Too many connections." })
-      .optional(),
+    coreDefaults: z.object({
+      calendar: agentSourceIdSchema.nullable().optional(),
+      email: agentSourceIdSchema.nullable().optional(),
+      chat: agentSourceIdSchema.nullable().optional(),
+    }).strict().optional(),
+    otherConnections: agentOtherConnectionIdsSchema.nullable().optional(),
+    connections: z.record(agentSourceIdSchema, agentSourcePolicySchema.nullable()).refine(withinConnectionLimit, tooManyConnections).optional(),
   })
   .strict()
 export type AgentSourcesPolicyInput = z.infer<typeof agentSourcesPolicyInputSchema>
@@ -123,9 +143,43 @@ export function agentCoreConnections(policy: AgentSourcesPolicy, kind: AgentCore
   return policy.coreConnections?.[kind] ?? null
 }
 
+/** The admin's default connection for a core source, or null for automatic. */
+export function agentCoreDefault(policy: AgentSourcesPolicy, kind: AgentCoreSource): string | null {
+  return policy.coreDefaults?.[kind] ?? null
+}
+
+/** The connections an admin put in Other context, or null for every connection whose read tools we reviewed. */
+export function agentOtherConnections(policy: AgentSourcesPolicy): readonly string[] | null {
+  return policy.otherConnections ?? null
+}
+
+/** Where a connection can be added: a core source, or Other context. */
+export const AGENT_SOURCE_SLOTS = [...AGENT_CORE_SOURCES, "other"] as const
+export type AgentSourceSlot = (typeof AGENT_SOURCE_SLOTS)[number]
+
 /** One of the organization's connections, as a source. */
 export const agentSourceConnectionSchema = z.object({ id: z.string(), name: z.string(), url: z.string() })
 export type AgentSourceConnection = z.infer<typeof agentSourceConnectionSchema>
+
+/**
+ * How many members connected their own account on a connection; null when that isn't known (a connection everyone
+ * shares one credential for). Absent from views saved before it existed: unknown.
+ */
+const connectedMembersSchema = z.number().int().min(0).nullable().default(null)
+
+/** A connection behind calendar, email or team chat, with how many members connected it. */
+export const agentCoreSourceConnectionSchema = agentSourceConnectionSchema.extend({ connectedMembers: connectedMembersSchema })
+export type AgentCoreSourceConnection = z.infer<typeof agentCoreSourceConnectionSchema>
+
+/** A connection an admin can add as a source, and where. */
+export const agentSourceOptionSchema = agentSourceConnectionSchema.extend({
+  /** Den's own provider (Google Workspace, Microsoft 365), read through Den; otherwise an MCP with reviewed read tools. */
+  native: z.boolean(),
+  /** Where it can be added. */
+  slots: z.array(z.enum(AGENT_SOURCE_SLOTS)),
+  connectedMembers: connectedMembersSchema,
+})
+export type AgentSourceOption = z.infer<typeof agentSourceOptionSchema>
 
 /** The policy for one source: a core source's own, or a connection's (members choose unless an admin decided). */
 export function agentSourcePolicy(policy: AgentSourcesPolicy, sourceId: string): AgentSourcePolicy {
@@ -147,11 +201,21 @@ export function mergeAgentSourcesPolicy(current: AgentSourcesPolicy, change: Age
     const picked = requested === undefined ? current.coreConnections?.[kind] : requested
     if (picked) coreConnections[kind] = [...new Set(picked)]
   }
+  const coreDefaults: NonNullable<AgentSourcesPolicy["coreDefaults"]> = {}
+  for (const kind of AGENT_CORE_SOURCES) {
+    const requested = change.coreDefaults?.[kind]
+    const chosen = requested === undefined ? current.coreDefaults?.[kind] : requested
+    if (chosen) coreDefaults[kind] = chosen
+  }
+  const requestedOther = change.otherConnections
+  const otherConnections = requestedOther === undefined ? current.otherConnections : requestedOther ?? undefined
   return {
     calendar: change.calendar ?? current.calendar,
     email: change.email ?? current.email,
     chat: change.chat ?? current.chat,
     ...(Object.keys(coreConnections).length ? { coreConnections } : {}),
+    ...(Object.keys(coreDefaults).length ? { coreDefaults } : {}),
+    ...(otherConnections ? { otherConnections: [...new Set(otherConnections)] } : {}),
     connections,
   }
 }
@@ -246,11 +310,19 @@ export const workbotProactiveViewSchema = z.object({
    * organization's connections.
    */
   sourceConnections: z.object({
-    calendar: z.array(agentSourceConnectionSchema),
-    email: z.array(agentSourceConnectionSchema),
-    chat: z.array(agentSourceConnectionSchema),
+    calendar: z.array(agentCoreSourceConnectionSchema),
+    email: z.array(agentCoreSourceConnectionSchema),
+    chat: z.array(agentCoreSourceConnectionSchema),
     /** Every other connection agents can read (a service with reviewed read tools), each its own source. */
     other: z.array(agentSourceConnectionSchema),
+    /** Every connection an admin can add as a source, with where it can go. */
+    all: z.array(agentSourceOptionSchema),
+    /**
+     * The default each core source uses now, by connection id: the admin's `coreDefaults` while it is still allowed,
+     * else the automatic one (the allowed connection most members connected). Null when nothing is allowed.
+     */
+    defaults: z.object({ calendar: z.string().nullable(), email: z.string().nullable(), chat: z.string().nullable() })
+      .default({ calendar: null, email: null, chat: null }),
   }).nullable(),
 })
 export type WorkbotProactiveView = z.infer<typeof workbotProactiveViewSchema>
@@ -302,9 +374,10 @@ export type AgentHourWindow = z.infer<typeof agentHourWindowSchema>
 
 /**
  * Everything a member's change can touch: their words, their narrower limits, each responsibility's mute, and per
- * source whether it is read (`source`) and their instruction for it (`sourceInstruction`).
+ * source whether it is read (`source`), their instruction for it (`sourceInstruction`) and, for calendar, email and
+ * team chat, which allowed connection it reads (`sourceConnection`).
  */
-export const AGENT_CHANGE_FIELDS = [...AGENT_PREFERENCE_FIELDS, "hours", "dailyCap", "quietWindow", ...AGENT_RESPONSIBILITIES, "source", "sourceInstruction"] as const
+export const AGENT_CHANGE_FIELDS = [...AGENT_PREFERENCE_FIELDS, "hours", "dailyCap", "quietWindow", ...AGENT_RESPONSIBILITIES, "source", "sourceInstruction", "sourceConnection"] as const
 export type AgentChangeField = (typeof AGENT_CHANGE_FIELDS)[number]
 export const agentChangeFieldSchema = z.enum(AGENT_CHANGE_FIELDS)
 /** Where a change came from: something the member said in chat (through Connect), or the Library page. */
@@ -315,7 +388,7 @@ export type AgentChangeSource = (typeof AGENT_CHANGE_SOURCES)[number]
 export const memberAgentChangeSchema = z.object({
   id: z.string(),
   field: agentChangeFieldSchema,
-  /** For `source` and `sourceInstruction`: which source (a core source or a connection id). */
+  /** For `source`, `sourceInstruction` and `sourceConnection`: which source (a core source or a connection id). */
   sourceId: z.string().nullable(),
   /** "When: “Between 12 and 2, only urgent things.”", "Stopped calendar changes". */
   summary: z.string(),
@@ -397,6 +470,17 @@ export type MemberAgentLimits = z.infer<typeof memberAgentLimitsSchema>
 /** Whether the member's own account on a connection is ready for their agent to read. */
 export const AGENT_SOURCE_CONNECTION_STATES = ["connected", "needs_connection", "reconnect"] as const
 
+/** One connection behind a member's source, and whether their own account on it is ready. */
+export const memberAgentSourceConnectionSchema = agentSourceConnectionSchema.extend({ state: z.enum(AGENT_SOURCE_CONNECTION_STATES) })
+export type MemberAgentSourceConnection = z.infer<typeof memberAgentSourceConnectionSchema>
+
+/**
+ * Who picked the connection a core source reads: the member, the admin's default, or automatically (the default most
+ * members use, or the first allowed one the member already connected).
+ */
+export const AGENT_SOURCE_CHOSEN_BY = ["member", "admin", "auto"] as const
+export type AgentSourceChosenBy = (typeof AGENT_SOURCE_CHOSEN_BY)[number]
+
 /** One source as the member sees it: whether their agent reads it, why it can't, and what they told it. */
 export const memberAgentSourceSchema = z.object({
   /** `calendar`, `email`, `chat`, or a connection id. */
@@ -404,8 +488,15 @@ export const memberAgentSourceSchema = z.object({
   kind: z.enum([...AGENT_CORE_SOURCES, "other"]),
   /** "Calendar", "Team chat", "Granola". */
   name: z.string(),
-  /** The connections behind it the member can use, and whether their account is ready. */
-  connections: z.array(agentSourceConnectionSchema.extend({ state: z.enum(AGENT_SOURCE_CONNECTION_STATES) })),
+  /**
+   * The connection it reads and whether the member's account is ready. Calendar, email and team chat read exactly one
+   * (none when the admin allowed none the member can use); another source reads its own connection.
+   */
+  connections: z.array(memberAgentSourceConnectionSchema),
+  /** Calendar, email and team chat: the allowed connections the member can pick from. Empty for other sources. */
+  options: z.array(memberAgentSourceConnectionSchema).default([]),
+  /** Calendar, email and team chat: who picked the connection it reads. Null for other sources. */
+  chosenBy: z.enum(AGENT_SOURCE_CHOSEN_BY).nullable().default(null),
   /** The admin's choice: on for everyone and not allowed are locked; members choose is the member's switch. */
   policy: agentSourcePolicySchema,
   /** The agent reads it (once a connection is ready). */
@@ -480,13 +571,16 @@ export const memberAgentInputSchema = z
     /** Hours inside the working day when only urgent messages go out; null removes it. */
     quietWindow: agentHourWindowSchema.nullable().optional(),
     /**
-     * What the agent reads, by source id or name ("Granola", "Linear", "Team chat"): on or off, and an instruction in
-     * the member's own words (an empty string clears it). The admin's policy decides which sources a member may change.
+     * What the agent reads, by source id or name ("Granola", "Linear", "Team chat"): on or off, an instruction in the
+     * member's own words (an empty string clears it), and for calendar, email or team chat which allowed connection to
+     * read (`connectionId`: "read my calendar from this connection"). The admin's policy decides which sources a member
+     * may change and which connections they may pick.
      */
     sources: z.array(z.object({
       source: z.string().trim().min(1).max(120),
       on: z.boolean().optional(),
       instruction: preferenceInputText.optional(),
+      connectionId: z.string().trim().min(1).max(64).optional(),
     }).strict()).min(1).max(20).optional(),
     /** `last` reverts the member's last save (every field it changed); a change id reverts that one change. */
     undo: z.string().trim().min(1).max(64).optional(),

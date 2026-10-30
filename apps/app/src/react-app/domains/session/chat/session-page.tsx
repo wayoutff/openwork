@@ -315,6 +315,10 @@ export type SessionPageProps = {
   /** Standalone pages use the main canvas instead of the inset conversation pane. */
   primarySurface?: "flat";
   primaryTitle?: string;
+  /** Replaces the header's title, e.g. a task on another computer's `Chat / Task` breadcrumb. */
+  primaryHeader?: React.ReactNode;
+  /** Open a task on another computer in the main pane (`remoteSessionHelperView`). */
+  onOpenRemoteTask?: (threadKey: string) => void;
   terminalOpen?: boolean;
   onTerminalOpenChange?: (open: boolean) => void;
   onSessionTabsChange?: (tabs: OpenSessionTab[]) => void;
@@ -1543,7 +1547,8 @@ export function SessionPage(props: SessionPageProps) {
           >
             <div className="flex min-w-0 items-center gap-3">
               {shellConfig.sidebar ? <MainSidebarControls onOpenSessionSearch={props.sidebar.onOpenSessionSearch} /> : null}
-              {parentSessionLink && !props.primarySlot && !hasMainContentTakeover ? (
+              {props.primaryHeader && !hasMainContentTakeover ? props.primaryHeader : null}
+              {!props.primaryHeader && parentSessionLink && !props.primarySlot && !hasMainContentTakeover ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -1565,6 +1570,7 @@ export function SessionPage(props: SessionPageProps) {
                   <TooltipContent>Back to parent chat</TooltipContent>
                 </Tooltip>
               ) : null}
+              {props.primaryHeader && !hasMainContentTakeover ? null : <>
               <h1 data-session-header-title className={cn("truncate font-medium text-dls-text", !isElectronRuntime() && !props.primaryTitle && !props.mainContentTitle && "max-lg:hidden", props.mainContentHeaderActionsRef ? "text-base leading-6" : "text-[13px]")}>
                 {props.primaryTitle
                   ? props.primaryTitle
@@ -1585,6 +1591,7 @@ export function SessionPage(props: SessionPageProps) {
                   <span className="max-w-40 truncate">{workspaceName}</span>
                 </span>
               ) : null}
+              </>}
               {props.developerMode && !props.mainContentHeaderActionsRef ? (
                 <span className="hidden text-[12px] text-dls-secondary lg:inline">
                   {props.headerStatus}
@@ -1902,6 +1909,7 @@ export function SessionPage(props: SessionPageProps) {
                             parentSessionTitle={parentSessionLink?.title}
                             onReturnToParent={parentSessionLink ? returnFromChild : undefined}
                             onOpenSubagentSession={openSubagentSession}
+                            onOpenRemoteTask={props.onOpenRemoteTask}
                           />
                         </div>
                       </div>
