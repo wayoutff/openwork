@@ -67,9 +67,15 @@ type RemoteThreadState = {
   enabled: boolean
   /** `remoteSessionThreadView`: a row opens the task's conversation beside the chat. */
   threadView: boolean
+  /** `remoteSessionHelperView`: a row opens the task in the main pane, like a helper. */
+  helperView: boolean
+  /** `remoteSessionAnswers`: the person answers a task's question or permission from here. */
+  answers: boolean
   threads: Record<string, RemoteThreadEntry>
   setEnabled: (enabled: boolean) => void
   setThreadView: (threadView: boolean) => void
+  setHelperView: (helperView: boolean) => void
+  setAnswers: (answers: boolean) => void
   watch: (start: RemoteThreadStart, input: { owner: RemoteThreadOwner; organizationId: string; startedAt: number | null }) => () => void
   followedUp: (key: string) => void
   /** The agent sent the task a follow-up itself. */
@@ -94,6 +100,8 @@ export function remoteThreadNeedsStatus(entry: RemoteThreadEntry, organizationId
 export const useRemoteThreadStore = create<RemoteThreadState>()((set, get) => ({
   enabled: false,
   threadView: false,
+  helperView: false,
+  answers: false,
   threads: {},
   setEnabled: (enabled) => {
     if (get().enabled === enabled) return
@@ -102,6 +110,8 @@ export const useRemoteThreadStore = create<RemoteThreadState>()((set, get) => ({
     else stopFollowing()
   },
   setThreadView: (threadView) => set({ threadView }),
+  setHelperView: (helperView) => set({ helperView }),
+  setAnswers: (answers) => set({ answers }),
   watch: (start, input) => {
     const ownerKey = `${input.owner.workspaceId}:${input.owner.sessionId}`
     const now = Date.now()
@@ -316,9 +326,19 @@ export function useRemoteThreadsEnabled(): boolean {
   return useRemoteThreadStore((state) => state.enabled)
 }
 
+/** Whether a task's question or permission can be answered here instead of on its computer. */
+export function useRemoteThreadAnswersEnabled(): boolean {
+  return useRemoteThreadStore((state) => state.enabled && state.answers)
+}
+
 /** Whether a task's row opens its conversation; rows alone show progress. */
 export function useRemoteThreadViewEnabled(): boolean {
   return useRemoteThreadStore((state) => state.enabled && state.threadView)
+}
+
+/** Whether a task opens in the main pane like a helper; it needs the conversation view too. */
+export function useRemoteThreadHelperViewEnabled(): boolean {
+  return useRemoteThreadStore((state) => state.enabled && state.threadView && state.helperView)
 }
 
 export function useRemoteThread(key: string | null): RemoteThreadEntry | null {
