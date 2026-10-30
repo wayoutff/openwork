@@ -14,7 +14,6 @@ const iconPath = resolve(desktopRoot, "resources", "icons", "computer-use.icns")
 const productName = "ComputerUse";
 const helperExecutableName = "ComputerUse";
 const helperAppName = "OpenWork Computer Use.app";
-const bundleIdentifier = "com.differentai.openwork.computer-use";
 
 const readArg = (name) => {
   const raw = process.argv.slice(2);
@@ -26,6 +25,14 @@ const readArg = (name) => {
 };
 
 const hasFlag = (name) => process.argv.slice(2).includes(name);
+const bundleIdentifier = readArg("--bundle-id") ?? "com.differentai.openwork.computer-use";
+const hostBundleIdentifier = readArg("--host-bundle-id") ?? "com.differentai.openwork";
+const displayName = readArg("--display-name") ?? "OpenWork Computer Use";
+const requireTeamSignature = hasFlag("--require-team-signature");
+for (const identifier of [bundleIdentifier, hostBundleIdentifier]) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/.test(identifier)) throw new Error("Invalid bundle identifier");
+}
+if (!/^[A-Za-z0-9 ._-]{1,80}$/.test(displayName)) throw new Error("Invalid helper display name");
 const outDir = resolve(readArg("--outdir") ?? join(desktopRoot, "resources", "helpers"));
 const force = hasFlag("--force") || process.env.OPENWORK_COMPUTER_USE_FORCE_BUILD === "1";
 const appPath = join(outDir, helperAppName);
@@ -56,16 +63,27 @@ function signingIdentity() {
   return match ? match[1] : "-";
 }
 
+function verifyRequiredSignature() {
+  if (!requireTeamSignature) return;
+  const info = spawnSync("codesign", ["--display", "--verbose=4", appPath], { encoding: "utf8" });
+  if (info.status !== 0 || !/^TeamIdentifier=[A-Z0-9]{10}$/m.test(info.stderr ?? "") || /Signature=adhoc/.test(info.stderr ?? "")) {
+    throw new Error("Computer Use helper requires a valid team signature; no ad-hoc fallback is allowed");
+  }
+  const check = spawnSync("codesign", ["--verify", "--strict", "--deep", appPath], { encoding: "utf8" });
+  if (check.status !== 0) throw new Error("Computer Use helper signature verification failed");
+}
+
 function signHelperApp() {
   if (process.platform !== "darwin") return;
   const identity = signingIdentity();
+  if (requireTeamSignature && identity === "-") throw new Error("Explicit Apple signing identity required for trusted local Computer Use");
   const args = ["--force", "--deep", "--sign", identity];
   if (identity !== "-") args.push("--options", "runtime");
   const result = spawnSync("codesign", [...args, appPath], {
     encoding: "utf8",
     stdio: "pipe",
   });
-  if (identity !== "-" && (result.status !== 0 || result.error)) {
+  if (identity !== "-" && !requireTeamSignature && (result.status !== 0 || result.error)) {
     // Keychain may refuse non-interactive signing; fall back to ad-hoc.
     const fallback = spawnSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
       encoding: "utf8",
@@ -80,8 +98,9 @@ function signHelperApp() {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`Failed to codesign ${appPath}: ${result.stderr?.trim() ?? "unknown error"}`);
+    throw new Error("Failed to sign Computer Use helper; check the Keychain approval and signing identity");
   }
+  verifyRequiredSignature();
 }
 
 function infoPlist() {
@@ -92,17 +111,19 @@ function infoPlist() {
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>OpenWork Computer Use</string>
+  <string>${displayName}</string>
   <key>CFBundleExecutable</key>
   <string>${helperExecutableName}</string>
   <key>CFBundleIdentifier</key>
   <string>${bundleIdentifier}</string>
+  <key>OpenWorkTrustedHostIdentifier</key>
+  <string>${hostBundleIdentifier}</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>OpenWork Computer Use</string>
+  <string>${displayName}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -161,6 +182,7 @@ if (process.platform !== "darwin") {
 // A cached helper is usable only for these exact native sources and target.
 // SwiftPM handles incremental compilation when the fingerprint changes.
 const fingerprint = createHash("sha256").update(process.arch);
+fingerprint.update(JSON.stringify({ bundleIdentifier, hostBundleIdentifier, displayName, requireTeamSignature, identity: signingIdentity() }));
 function hashSources(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const source = join(directory, entry.name);
@@ -177,6 +199,7 @@ const sourceHash = fingerprint.digest("hex");
 const fingerprintPath = join(appPath, "Contents", "Resources", "source.sha256");
 const cachedHash = existsSync(fingerprintPath) ? readFileSync(fingerprintPath, "utf8").trim() : "";
 if (!force && cachedHash === sourceHash && existsSync(join(appPath, "Contents", "MacOS", helperExecutableName))) {
+  verifyRequiredSignature();
   process.stdout.write(JSON.stringify({ ok: true, skipped: true, appPath }, null, 2) + "\n");
   process.exit(0);
 }

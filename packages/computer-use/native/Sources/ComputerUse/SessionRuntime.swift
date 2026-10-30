@@ -19,6 +19,10 @@ final class SessionRuntime {
     private var lastWatchCaptureAt: TimeInterval = -.infinity
     private var handBack = SharedDesktop.HandBack()
     private var handBackTimer: Timer?
+    private let frontPolicy: SharedDesktop.FrontPolicy
+    private var retainedFront = SharedDesktop.RetainedFront()
+    private var idleFocus: (pid: pid_t?, window: AXUIElement?)?
+    private var terminalHandBack: Session?
     private let backgroundDelivery = ProcessInfo.processInfo.environment[InputDelivery.hostVariable] == InputDelivery.background.rawValue
 
     private struct Session {
@@ -64,8 +68,9 @@ final class SessionRuntime {
         /// The person interrupted the last step; the read right after it leaves the front to them.
         var yielded = false
     }
-    init(policy: RuntimePolicy = .desktop, clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
-        self.policy = policy; self.clock = clock
+    init(policy: RuntimePolicy = .desktop, clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         frontPolicy: SharedDesktop.FrontPolicy = .init(environment: ProcessInfo.processInfo.environment)) {
+        self.policy = policy; self.clock = clock; self.frontPolicy = frontPolicy
         controls.onPause = { [weak self] reason in self?.pause(reason) }
         controls.onAvailability = { [weak self] available in self?.desktopAvailability(available) }
         controls.onResume = { [weak self] in Task { await self?.resume() } }
@@ -85,9 +90,19 @@ final class SessionRuntime {
             return text(["ok": true, "state": "closed"])
         }
         guard !busy else { throw UseError("busy", "A computer operation is still running. Calls must be sequential.", next: "wait") }
+        checkRetainedFront()
+        idleFocus = nil
         watch.invalidate(); watchCapture?.cancel(); MCPOutput.shared.discardUnsentFrame()
         handBackTimer?.invalidate(); handBackTimer = nil
-        busy = true; defer { busy = false; scheduleHandBack() }
+        busy = true
+        defer {
+            busy = false
+            if let terminal = terminalHandBack {
+                giveBack(terminal)
+                terminalHandBack = nil; handBack.forget()
+            }
+            rememberIdleFocus(); scheduleHandBack()
+        }
         switch name {
         case "computer_discover":
             try a.only([])
@@ -312,6 +327,7 @@ final class SessionRuntime {
     }
     private func checkActive(_ expected: Session, deadline: TimeInterval? = nil) throws {
         try Task.checkCancellation()
+        checkRetainedFront()
         guard let current = session, current.id == expected.id else {
             throw UseError("session_changed", "Access ended during this operation. No remaining input is allowed.", next: "human_takeover")
         }
@@ -358,8 +374,8 @@ final class SessionRuntime {
         var otherWindowFocused = current.mode == .control && current.delivery == .background && current.parents.isEmpty
             && access.focusesAnotherWindow(than: current.target, app: current.app)
         var returns = 0
-        // Something else in front is the person or another app, not a takeover:
-        // bring the selected window back for this read; it is handed back after.
+        // Default sharing brings the selected window back for this read. Retained
+        // foreground sessions have already checked for an idle takeover above.
         func bringBack() async throws {
             guard current.takesFront else { return }
             // Right after the person interrupted a step, read without taking the front.
@@ -557,9 +573,8 @@ final class SessionRuntime {
         // agents in other windows of this app wait until this batch's input is sent.
         let keyLease = front || background ? try await FocusLease.acquire(app: current.frontApp.pid, check: { try self.checkActive(current) }) : nil
         defer { keyLease?.release() }
-        // The person may be using another app meanwhile; bring the selected window back
-        // for this step instead of pausing when they switched away. A click or key of
-        // theirs from here on stops the step and leaves the computer to them.
+        // Default sharing brings the selected window back for this step. Retained
+        // foreground sessions also check input continuously across calls.
         try await takeGap(current, front: front)
         let moment = ProcessInfo.processInfo.systemUptime
         var returns = 0
@@ -787,6 +802,7 @@ final class SessionRuntime {
         session?.paused = true; session?.generation += 1; session?.observation = nil; session?.records = []; session?.focus = nil
         // A takeover leaves the front wherever the person puts it.
         handBack.forget(); handBackTimer?.invalidate(); handBackTimer = nil
+        retainedFront.yield(); idleFocus = nil
         stopWatching()
         input.releaseAll()
         if announce { controls.update(reason, paused: true) }
@@ -818,16 +834,22 @@ final class SessionRuntime {
     /// Brings the selected window to the front, remembering which app had it. A click
     /// or key of the person's while it comes forward stops whatever was to follow.
     private func takeFront(_ current: Session) async throws {
+        let started = now
         handBack.record(frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier,
             target: current.frontApp.pid, own: ProcessInfo.processInfo.processIdentifier, at: ProcessInfo.processInfo.systemUptime)
         do {
             try await SharedDesktop.acquire(now: { ProcessInfo.processInfo.systemUptime }, buttonDown: { self.personHoldsButton() },
                 focus: { try await self.focusTarget(current) }, interrupted: { self.personInterrupted(since: $0) })
+            if frontPolicy.retains(mode: current.mode, delivery: current.delivery) { retainedFront.begin(at: started) }
         } catch let error as UseError where error.code == SharedDesktop.interrupted.code {
             // Their input may have landed in the agent's window: the front stays there,
             // and the read that follows does not take it again.
             handBack.forget()
             session?.yielded = true
+            if frontPolicy.retains(mode: current.mode, delivery: current.delivery) {
+                pause("You used the computer. Click Continue when you are ready.")
+                throw interruption(session ?? current)
+            }
             throw error
         }
     }
@@ -850,22 +872,58 @@ final class SessionRuntime {
     /// `handBackDelay`, so an action and the read after it count as one moment.
     private func scheduleHandBack() {
         handBackTimer?.invalidate(); handBackTimer = nil
-        guard handBack.pid != nil else { return }
-        let timer = Timer(timeInterval: SharedDesktop.handBackDelay, repeats: false) { [weak self] _ in
+        guard handBack.pid != nil, let current = session, !current.paused,
+              let delay = frontPolicy.handBackDelay(mode: current.mode, delivery: current.delivery) else { return }
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.giveBack() }
         }
         RunLoop.main.add(timer, forMode: .common)
         handBackTimer = timer
     }
-    private func giveBack() {
+
+    private func frontFocus(_ current: Session) -> (pid: pid_t?, window: AXUIElement?) {
+        (NSWorkspace.shared.frontmostApplication?.processIdentifier,
+         access.elementAttribute(AXUIElementCreateApplication(current.frontApp.pid), kAXFocusedWindowAttribute))
+    }
+
+    private func checkRetainedFront() {
+        guard let current = session, !current.paused, resumingSessionID == nil,
+              frontPolicy.retains(mode: current.mode, delivery: current.delivery), retainedFront.since != nil else { return }
+        var changed = false
+        if !busy, let idleFocus {
+            let focus = frontFocus(current)
+            let sameWindow: Bool
+            switch (idleFocus.window, focus.window) {
+            case (nil, nil): sameWindow = true
+            case (let before?, let after?): sameWindow = CFEqual(before, after)
+            default: sameWindow = false
+            }
+            changed = idleFocus.pid != focus.pid || !sameWindow
+        }
+        let latest = (Self.interruptions + [.scrollWheel, .flagsChanged]).map { lastPersonInput($0) }.max() ?? -.infinity
+        if retainedFront.check(lastPersonInput: latest, focusChanged: changed) {
+            pause("You changed focus or used the computer. Click Continue when you are ready.")
+        }
+    }
+
+    private func rememberIdleFocus() {
+        checkRetainedFront()
+        guard let current = session, !current.paused,
+              frontPolicy.retains(mode: current.mode, delivery: current.delivery) else { idleFocus = nil; return }
+        retainedFront.begin(at: now)
+        idleFocus = frontFocus(current)
+    }
+    private func giveBack(_ terminal: Session? = nil) {
         handBackTimer?.invalidate(); handBackTimer = nil
-        guard !busy, let current = session, !current.paused else { return }
+        guard !busy, let current = terminal ?? session, !current.paused else { return }
         // Another agent bringing its window forward keeps the front, and hands it back itself.
         guard let focus = FocusLease.attempt() else { handBack.forget(); return }
         defer { focus.release() }
         // Any click or key since the front was taken, even one that might be the
         // agent's own, means the person may be working in the agent's window.
-        let latest = Self.interruptions.map { lastPersonInput($0) }.max() ?? -.infinity
+        let interruptions = frontPolicy.retains(mode: current.mode, delivery: current.delivery)
+            ? Self.interruptions + [.scrollWheel, .flagsChanged] : Self.interruptions
+        let latest = interruptions.map { lastPersonInput($0) }.max() ?? -.infinity
         guard let pid = handBack.take(frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                   target: current.frontApp.pid, lastPersonInput: latest),
               let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
@@ -979,7 +1037,10 @@ final class SessionRuntime {
             }) : nil
             defer { keys?.release() }
             // A background session stays behind the person's work; each step readies its window.
-            if current.delivery != .background { try await focusTarget(current) }
+            if current.delivery != .background {
+                if frontPolicy.retains(mode: current.mode, delivery: current.delivery) { try await takeFront(current) }
+                else { try await focusTarget(current) }
+            }
             guard session?.id == current.id, session?.generation == current.generation else { return }
             _ = try access.validate(current.target, app: current.app, requireFrontmost: current.takesFront)
             expire(); guard session != nil else { return }
@@ -987,6 +1048,10 @@ final class SessionRuntime {
             session?.interactionDeadline = nil
             session?.needsRefresh = true
             session?.paused = false; session?.generation += 1; session?.observation = nil; session?.lastUsed = now
+            if frontPolicy.retains(mode: current.mode, delivery: current.delivery) {
+                retainedFront.resume(at: now)
+                idleFocus = frontFocus(current)
+            }
             controls.update("Refreshing the selected window before continuing…", paused: false)
         } catch {
             guard session?.id == current.id, session?.generation == current.generation else { return }
@@ -996,6 +1061,7 @@ final class SessionRuntime {
         }
     }
     private func expire() {
+        checkRetainedFront()
         guard let current = session else { return }
         if let deadline = current.interactionDeadline, now >= deadline {
             session?.interactionDeadline = nil
@@ -1008,7 +1074,18 @@ final class SessionRuntime {
         if now - current.started >= 900 { session?.started = now }
     }
     func close(stoppedByPerson: Bool = false) {
-        giveBack(); handBack.forget()
+        checkRetainedFront()
+        handBackTimer?.invalidate(); handBackTimer = nil
+        if busy, let current = session, !current.paused,
+           frontPolicy.retains(mode: current.mode, delivery: current.delivery) {
+            // Cancellation first releases input and unwinds per-call focus leases.
+            // Only then may the single terminal handback attempt take the lease.
+            terminalHandBack = current
+        } else {
+            giveBack()
+        }
+        if terminalHandBack == nil { handBack.forget() }
+        retainedFront.close(); idleFocus = nil
         stopWatching()
         resumingSessionID = nil; session = nil
         input.releaseAll(); lease = nil; controls.close(stoppedByPerson: stoppedByPerson)

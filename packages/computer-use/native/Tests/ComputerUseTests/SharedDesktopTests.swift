@@ -2,6 +2,119 @@ import XCTest
 @testable import ComputerUse
 
 final class SharedDesktopTests: XCTestCase {
+    func testKeepFrontRequiresExactHostOptIn() {
+        for value in [nil, "", "0", "true", "yes", " 1", "1 ", "01"] as [String?] {
+            let policy = SharedDesktop.FrontPolicy(environment: value.map { [SharedDesktop.FrontPolicy.hostVariable: $0] } ?? [:])
+            XCTAssertFalse(policy.enabled)
+            XCTAssertEqual(policy.handBackDelay(mode: .control, delivery: .foreground), 0.4)
+        }
+        XCTAssertEqual(SharedDesktop.FrontPolicy.hostVariable, "OPENWORK_COMPUTER_USE_KEEP_FRONT")
+        XCTAssertTrue(SharedDesktop.FrontPolicy(environment: [SharedDesktop.FrontPolicy.hostVariable: "1"]).enabled)
+    }
+
+    func testKeepFrontOnlySuppressesForegroundControlHandBackTimer() {
+        let policy = SharedDesktop.FrontPolicy(environment: [SharedDesktop.FrontPolicy.hostVariable: "1"])
+        XCTAssertNil(policy.handBackDelay(mode: .control, delivery: .foreground))
+        for mode in AccessMode.allCases {
+            XCTAssertEqual(policy.handBackDelay(mode: mode, delivery: .background), 0.4)
+        }
+        for mode in [AccessMode.observe, .assist] {
+            XCTAssertEqual(policy.handBackDelay(mode: mode, delivery: .foreground), 0.4)
+        }
+    }
+
+    func testRetainedFrontKeepsOriginalInputBaselineAcrossCallsAndLongIdle() {
+        var clock: TimeInterval = 10
+        var front = SharedDesktop.RetainedFront()
+        front.begin(at: clock)
+        clock += SharedDesktop.handBackDelay
+        XCTAssertFalse(front.check(lastPersonInput: 9, focusChanged: false))
+        clock += 60
+        front.begin(at: clock)
+        XCTAssertEqual(front.since, 10)
+        XCTAssertTrue(front.check(lastPersonInput: 10.001, focusChanged: false))
+        XCTAssertTrue(front.yielded)
+        front.begin(at: clock + 1)
+        XCTAssertNil(front.since, "Another tool call cannot resume a takeover")
+        XCTAssertTrue(front.check(lastPersonInput: 9, focusChanged: false))
+    }
+
+    func testIdleFocusChangeRequiresExplicitContinueEvenWithoutPhysicalInput() {
+        var front = SharedDesktop.RetainedFront()
+        front.begin(at: 10)
+        XCTAssertTrue(front.check(lastPersonInput: 9, focusChanged: true))
+        front.begin(at: 11)
+        XCTAssertTrue(front.yielded)
+        front.resume(at: 12)
+        XCTAssertFalse(front.check(lastPersonInput: 11.9, focusChanged: false))
+        XCTAssertTrue(front.check(lastPersonInput: 12.001, focusChanged: false))
+    }
+
+    func testExplicitTakeoverAndTerminalCancellationClearRetainedInterval() {
+        var front = SharedDesktop.RetainedFront()
+        front.begin(at: 10)
+        front.yield()
+        front.begin(at: 11)
+        XCTAssertTrue(front.yielded)
+        XCTAssertNil(front.since)
+        front.close()
+        XCTAssertFalse(front.yielded)
+        XCTAssertNil(front.since)
+        XCTAssertFalse(front.check(lastPersonInput: 20, focusChanged: true))
+    }
+
+    func testSkippedIdleTimerRetainsOneTerminalHandBack() {
+        let policy = SharedDesktop.FrontPolicy(environment: [SharedDesktop.FrontPolicy.hostVariable: "1"])
+        var clock: TimeInterval = 10
+        var handBack = SharedDesktop.HandBack()
+        handBack.record(frontmost: 40, target: 7, own: 3, at: clock)
+        clock += 60
+        if policy.handBackDelay(mode: .control, delivery: .foreground) != nil {
+            _ = handBack.take(frontmost: 7, target: 7, lastPersonInput: 9)
+        }
+        handBack.record(frontmost: 50, target: 7, own: 3, at: clock)
+        XCTAssertEqual(handBack.takenAt, 10)
+        XCTAssertEqual(handBack.take(frontmost: 7, target: 7, lastPersonInput: 9), 40)
+        XCTAssertNil(handBack.take(frontmost: 7, target: 7, lastPersonInput: 9))
+    }
+
+    func testRetainedForegroundTakeoverCancelsTerminalHandBack() {
+        for changedFocus in [false, true] {
+            var front = SharedDesktop.RetainedFront()
+            var handBack = SharedDesktop.HandBack()
+            front.begin(at: 10)
+            handBack.record(frontmost: 40, target: 7, own: 3, at: 10)
+            if front.check(lastPersonInput: changedFocus ? 9 : 11, focusChanged: changedFocus) { handBack.forget() }
+            XCTAssertNil(handBack.take(frontmost: 7, target: 7, lastPersonInput: 9))
+        }
+    }
+
+    @MainActor
+    func testCancellationWhileWaitingNeverAcquiresFocusAndLeavesOneHandBack() async {
+        var clock: TimeInterval = 10
+        var front = SharedDesktop.RetainedFront()
+        var handBack = SharedDesktop.HandBack()
+        var focused = false
+        front.begin(at: clock)
+        handBack.record(frontmost: 40, target: 7, own: 3, at: clock)
+        let operation = Task { @MainActor in
+            try await SharedDesktop.takeGap(busy: { true }, now: { clock }, check: {
+                try Task.checkCancellation()
+            }, sleep: { clock += $0 })
+            focused = true
+        }
+        operation.cancel()
+        do {
+            try await operation.value
+            XCTFail("Cancelled input continued")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        front.close()
+        XCTAssertFalse(focused)
+        XCTAssertNil(front.since)
+        XCTAssertEqual(handBack.take(frontmost: 7, target: 7, lastPersonInput: 9), 40)
+        XCTAssertNil(handBack.take(frontmost: 7, target: 7, lastPersonInput: 9))
+    }
+
     func testOnlyTypingOrAHeldButtonIsBusy() {
         XCTAssertTrue(SharedDesktop.personBusy(keyAt: 99.9, buttonDown: false, now: 100))
         XCTAssertTrue(SharedDesktop.personBusy(keyAt: 0, buttonDown: true, now: 100))

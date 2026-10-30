@@ -98,6 +98,7 @@ struct AppIdentity {
         // Every JetBrains IDE has a terminal. Never the host apps either: an agent must not grant
         // itself access or approve its own requests.
         return !protected.contains(id) && !id.hasPrefix("com.jetbrains.") && !id.hasPrefix("com.google.android.studio")
+            && !HostTrust.isHostApplication(id)
             && !id.hasPrefix("com.differentai.openwork") && !id.hasPrefix("com.differentai.opencoworker")
             && !id.hasPrefix("com.openwork") && !id.hasPrefix("com.openai")
     }

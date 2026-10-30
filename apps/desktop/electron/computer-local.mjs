@@ -388,11 +388,12 @@ export function createLocalComputerAdapter({
      *   signal?: AbortSignal,
      *   presence?: { name?: string, color?: string },
      *   background?: boolean,
+     *   keepFront?: boolean,
      *   onUi?: (params: unknown) => void,
      *   onClose?: () => void,
      * }} [options]
      */
-    async connect({ signal, onUi = () => {}, onClose = () => {}, presence, background = false } = {}) {
+    async connect({ signal, onUi = () => {}, onClose = () => {}, presence, background = false, keepFront = false } = {}) {
       signal?.throwIfAborted();
       await dismissSetup();
       const state = await inspect();
@@ -407,7 +408,8 @@ export function createLocalComputerAdapter({
         ? { OPENWORK_COMPUTER_USE_PRESENCE: JSON.stringify({ name: presence.name.trim().slice(0, 32), color: presence.color }) } : {};
       // Set only while `computerUseBackground` is on: the helper then works behind other windows.
       const delivery = background ? { OPENWORK_COMPUTER_USE_DELIVERY: "background" } : {};
-      const transport = new StdioClientTransport({ command: state.binary, args: ["mcp-embedded"], env: { ...env, ...shown, ...delivery }, stderr: "ignore" });
+      // Explicit off also overrides any environment inherited by the MCP transport.
+      const transport = new StdioClientTransport({ command: state.binary, args: ["mcp-embedded"], env: { ...env, ...shown, ...delivery, OPENWORK_COMPUTER_USE_KEEP_FRONT: keepFront === true ? "1" : "0" }, stderr: "ignore" });
       let closed = false;
       let terminationConfirmed = false;
       let busy = false;

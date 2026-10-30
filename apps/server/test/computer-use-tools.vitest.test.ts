@@ -38,3 +38,14 @@ test("a Windows PC is not offered app scripting", async () => {
     expect(plugin.tool.computer_open.description).toContain("Windows PC");
   } finally { Object.defineProperty(process, "platform", platform); }
 });
+
+test("stale recovery guidance preserves no-replay and privacy boundaries", async () => {
+  const plugin = await server();
+  for (const tool of [plugin.tool.computer_open, plugin.tool.computer_observe, plugin.tool.computer_act]) {
+    expect(tool.description).toContain("completed=0, failed_step=0, may_have_acted=false");
+    expect(tool.description).toContain("at most two fresh attempts");
+    expect(tool.description).toContain("computer_open does not refresh");
+    expect(tool.description).toContain("privacy_incomplete does not establish that the model lacks vision");
+    expect(tool.description).toContain("Never replay partial, uncertain, interrupted or stopped input");
+  }
+});

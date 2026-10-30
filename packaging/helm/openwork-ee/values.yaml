@@ -26,6 +26,8 @@ config:
   #   "false" off for everyone; /admin shows "Set by deployment config"
   # The /admin kill switch still turns a feature off, even when locked on.
   features:
+    computerKeepFront: ""            # default off · Allow an opt-in preference to leave the foreground computer-use window active between steps without locking focus.
+    localComputerUse: ""             # default off · Opt in to Computer Use in an isolated signed local developer profile without a cloud account.
     sessionFileBrowser: ""           # default off · Browse and preview files in the current conversation folder from a dedicated side tab.
     gitChangesPanel: ""              # default off · Review working tree and branch changes beside the chat with unified or split diffs.
     libraryDetailBreadcrumbs: ""     # default on · Navigate from a skill or connector to its parent plugin or Library category without losing your place.

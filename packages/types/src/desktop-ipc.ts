@@ -491,6 +491,8 @@ export type DesktopCommandMap = {
   computerHalt: { args: [sessionId: string]; result: ComputerSnapshot };
   computerAnswerRequest: { args: [input: { sessionId: string; answer: "dismiss" | "allow" | "always"; id?: string }]; result: ComputerSnapshot };
   computerSetFeatureEnabled: { args: [enabled: boolean]; result: boolean };
+  computerLocalProfile: { args: []; result: boolean };
+  computerSetKeepFrontEnabled: { args: [enabled: boolean]; result: boolean };
   computerSetRemoteEnabled: { args: [enabled: boolean]; result: boolean };
   computerSetBackgroundEnabled: { args: [enabled: boolean]; result: boolean };
   computerResetPermission: { args: [permission: ComputerPermission]; result: { setupId: string } };

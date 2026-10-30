@@ -25,6 +25,12 @@ export type ProgramImage = { type: "image"; data: string; mimeType: string }
 const record = z.record(z.string(), z.unknown())
 const image = z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string() })
 const content = z.object({ isError: z.boolean().optional(), content: z.array(z.union([z.object({ type: z.literal("text"), text: z.string() }), image])) })
+const staleComputerReceipt = z.object({
+  ok: z.literal(false), status: z.literal("failed"), code: z.literal("stale_observation"), next: z.literal("observe"),
+  completed: z.literal(0), failed_step: z.literal(0), may_have_acted: z.literal(false),
+  steps: z.tuple([z.object({ index: z.literal(0), action: z.enum(["press", "set_value"]), status: z.literal("skipped"), code: z.literal("stale_observation") }).strict()]),
+  post_observation: z.never().optional(), failed_phase: z.never().optional(), dispatched: z.literal(false).optional(),
+})
 const selector = z.object({
   role: z.string().max(80).optional(), name: z.string().max(300).optional(), text: z.string().max(300).optional(),
   exact: z.boolean().optional(), nth: z.number().int().min(0).max(499).optional(),
@@ -40,7 +46,7 @@ const node = z.object({
 })
 type Selector = z.infer<typeof selector>
 type Node = z.infer<typeof node>
-type Observation = { observationId: string; elements: Node[]; text: string; width: number; height: number; scroll?: { x: number; y: number }; truncated: boolean; progress?: string }
+type Observation = { observationId: string; elements: Node[]; text: string; width: number; height: number; mode?: string; imageIncluded: boolean; imageIssue?: string; scroll?: { x: number; y: number }; truncated: boolean; progress?: string }
 
 export class ComputerProgramError extends Error {
   constructor(readonly code: string, message: string, readonly mayHaveActed = false, readonly canRefreshTarget = false) { super(message) }
@@ -142,9 +148,14 @@ export async function runComputerProgram(request: ProgramRequest, host: ProgramH
     const bitmap = result.data.content.filter((part): part is ProgramImage => part.type === "image")
     if (bitmap.length) images = bitmap.slice(-1)
     for (const value of payloads) {
-      if (value.ok === false || value.status === "partial") return issue(stringAt(value.code, "action_incomplete"), stringAt(value.message, "The action did not finish. Inspect its receipt before continuing."), value.may_have_acted === true)
       const post = record.safeParse(value.post_observation)
       if (post.success && post.data.ok === false) return issue("post_observation_failed", "Input may have run, but the resulting view is unavailable. Do not replay the program.", true)
+      if (value.ok === false || value.status === "partial" || value.status === "failed") {
+        const stale = staleComputerReceipt.safeParse(value)
+        const action = record.safeParse(args.action)
+        const canRefresh = name === "computer_act" && result.data.content.length === 1 && stale.success && action.success && stale.data.steps[0].action === action.data.type
+        return issue(stringAt(value.code, "action_incomplete"), stringAt(value.message, "The action did not finish. Inspect its receipt before continuing."), value.may_have_acted === true || Boolean(receipt) && !canRefresh, canRefresh)
+      }
     }
     if (result.data.isError) return issue("computer_failed", "The computer tool did not complete.")
     return payloads.findLast((value) => typeof value.observation_id === "string") ?? payloads[0] ?? issue("invalid_receipt", "No readable computer receipt was returned.")
@@ -158,6 +169,10 @@ export async function runComputerProgram(request: ProgramRequest, host: ProgramH
       observationId: stringAt(value.observationId, stringAt(value.observation_id)),
       elements: Array.isArray(value.elements) ? value.elements.flatMap((item) => { const normalized = normalizeNode(item); return normalized ? [normalized] : [] }) : [],
       text: stringAt(value.text), width: numberAt(geometry.width, 1), height: numberAt(geometry.height, 1),
+      mode: typeof value.mode === "string" ? value.mode : undefined,
+      imageIncluded: request.surface === "browser" || imageInfo.success && imageInfo.data.included === true && images.length > 0,
+      imageIssue: imageInfo.success && record.safeParse(imageInfo.data.unavailable).success
+        ? stringAt(record.parse(imageInfo.data.unavailable).code) : undefined,
       truncated: value.truncated === true, progress: JSON.stringify(value.scrollRegions ?? null), ...(scroll.success ? { scroll: scroll.data } : {}),
     }
   }
@@ -215,21 +230,43 @@ export async function runComputerProgram(request: ProgramRequest, host: ProgramH
   // Pane layout can change between observation and input. Refresh a semantic
   // target only when the host explicitly confirms that no input was dispatched.
   // Raw refs, uncertain receipts and already-dispatched actions are never replayed.
-  const withFreshTarget = async <T>(work: () => Promise<T>): Promise<T> => {
+  const withFreshTarget = async <T>(work: () => Promise<T>, refreshComputer = false): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       try { return await work() }
       catch (error) {
-        if (request.surface !== "browser" || attempt >= 2 || !(error instanceof ComputerProgramError) || !error.canRefreshTarget) throw error
+        signal.throwIfAborted()
+        if ((request.surface !== "browser" && !refreshComputer) || attempt >= 2 || !(error instanceof ComputerProgramError) || !error.canRefreshTarget) throw error
         latest = null; latestQuery = null
         await pause(50)
       }
     }
   }
-  const click = (target: Selector) => withFreshTarget(async () => {
+  // Retry only this atomic operation, never its enclosing click/type or form sequence.
+  const computerSemanticAct = (target: Selector, type: "press" | "set_value", text?: string, allowRecovery = true) => withFreshTarget(async () => {
+    const element = ready(await find(target))
+    if (type === "press" ? !element.press : !element.editable || !element.settable) return issue("target_changed", "The current control no longer supports the requested semantic action.")
+    return act({ type, ref: element.ref, ...(type === "set_value" ? { text } : {}) })
+  }, allowRecovery && target.nth === undefined && target.exact !== false && Boolean(target.role?.trim() && (target.name?.trim() || target.text?.trim())))
+  const requireVisualInput = (view: Observation, checkImage = true) => {
+    if (request.surface !== "computer") return;
+    if (view.mode === "assist" || view.mode === "observe") {
+      return issue("control_mode_required", "This target has no usable semantic press for this operation. Visual input requires control mode; no input was sent. Do not infer AXPress from a Button role. Reopen only if control is authorized and then obtain a fresh screenshot.")
+    }
+    if (checkImage && (!view.imageIncluded || view.width <= 0 || view.height <= 0)) {
+      return issue(view.imageIssue || "image_required", "No usable screenshot is available for coordinate input. No input was sent. Accessible geometry alone is not a screenshot; do not bypass capture privacy checks.")
+    }
+  }
+  const click = (target: Selector, allowRecovery = true) => withFreshTarget(async () => {
     const element = await reveal(target)
     if (request.surface === "browser") await act({ type: "click", ref: element.ref })
-    else if (element.press) await act({ type: "press", ref: element.ref })
-    else { await observe(true); const fresh = ready(select(latest ?? await observe(true), target)); await act({ type: "click", ...point(fresh, latest ?? await observe(true)) }) }
+    else if (element.press) await computerSemanticAct(target, "press", undefined, allowRecovery)
+    else {
+      requireVisualInput(latest ?? await observe(false), false)
+      const view = await observe(true)
+      requireVisualInput(view)
+      const fresh = ready(select(view, target))
+      await act({ type: "click", ...point(fresh, view) })
+    }
     return { clicked: true }
   })
   const fill = (target: Selector, text: string, append = false) => withFreshTarget(async () => {
@@ -239,7 +276,7 @@ export async function runComputerProgram(request: ProgramRequest, host: ProgramH
       if (append && element.value === undefined) return issue("state_unavailable", "Observe the current field value before appending.")
       await act({ type: "fill", ref: element.ref, text: append ? element.value + text : text })
     }
-    else if (element.settable && !append) await act({ type: "set_value", ref: element.ref, text })
+    else if (element.settable && !append) await computerSemanticAct(target, "set_value", text)
     else {
       await click(target)
       if (!append) await act({ type: "key", key: "a", modifiers: ["command"] })
@@ -260,6 +297,7 @@ export async function runComputerProgram(request: ProgramRequest, host: ProgramH
   }
   const scroll = (direction: "up" | "down", pages: number, container?: Selector) => withFreshTarget(async () => {
     const view = await observe(request.surface === "computer", container)
+    requireVisualInput(view)
     const region = container ? ready(select(view, container)) : null
     const at = region ? point(region, view) : { x: view.width * 0.65, y: view.height * 0.65 }
     const distance = Math.min(1200, Math.max(100, Math.round((region?.bounds.height ?? view.height) * 0.75 * pages)))
@@ -299,7 +337,8 @@ export async function runComputerProgram(request: ProgramRequest, host: ProgramH
       if (current.checked === undefined) return issue("state_unavailable", "This control exposes no checked state.")
       if (current.checked !== checked) {
         if (request.surface === "browser") { const element = await reveal(target); await act({ type: "set_checked", ref: element.ref, checked }) }
-        else await click(target)
+        // A press is a toggle: never retry it after the checked state may change.
+        else await click(target, false)
       }
       await pause(50)
       if ((await find(target, true, true))?.checked !== checked) return issue("state_not_confirmed", "The requested checkbox state was not confirmed; do not toggle it again blindly.", true)

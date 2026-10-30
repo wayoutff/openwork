@@ -701,12 +701,17 @@ export function SessionRoute() {
     })) return;
     void refreshRouteState({ supersede: true });
   }, [cloudWorkspace.gatewayMode, cloudWorkspace.viewModel.variant, cloudWorkspace.visible, refreshRouteState]);
-  const cloudMcpProviderModel = useMemo(() => local.prefs.defaultModel
+  const selectedSessionModelSelection = useSessionModelStore((state) =>
+    (selectedSessionId ? state.bySessionId[selectedSessionId] ?? null : null),
+  );
+  const activeComposerModel = selectedSessionModelSelection?.model ?? (selectedSessionId ? local.prefs.defaultModel : newTaskModel) ?? null;
+  // Projection follows the composer, not the app default that workspace and session picks leave unchanged.
+  const cloudMcpProviderModel = useMemo(() => activeComposerModel
     ? {
-        provider: local.prefs.defaultModel.providerID,
-        model: local.prefs.defaultModel.modelID,
+        provider: activeComposerModel.providerID,
+        model: activeComposerModel.modelID,
       }
-    : undefined, [local.prefs.defaultModel?.modelID, local.prefs.defaultModel?.providerID]);
+    : undefined, [activeComposerModel?.modelID, activeComposerModel?.providerID]);
   const sessionMcpMaintenance = useSessionMcpMaintenance({
     cloudSignedIn: denAuth.isSignedIn,
     cloudAuthStatus: denAuth.status,
@@ -1339,10 +1344,6 @@ export function SessionRoute() {
   // organization model's removal: two complete member inventory reads, with an
   // engine refetch between them, must independently establish lost assignment.
   const modelRecoveryScope = JSON.stringify([sessionDraftScope, opencodeBaseUrl, selectedWorkspaceId]);
-  const selectedSessionModelSelection = useSessionModelStore((state) =>
-    (selectedSessionId ? state.bySessionId[selectedSessionId] ?? null : null),
-  );
-  const activeComposerModel = selectedSessionModelSelection?.model ?? (selectedSessionId ? local.prefs.defaultModel : newTaskModel) ?? null;
   const recoveryChatKey = modelRecoveryChatKey(modelRecoveryScope, selectedSessionId);
   // Persist names under the existing stable workspace identity, not a local
   // server port or engine-version URL that can change at the next launch.

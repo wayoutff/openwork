@@ -8,6 +8,10 @@ export function useFeatureFlagsPreferences() {
   const workspaceRunModeEnabled = prefs.featureFlags?.workspaceRunMode === true;
   const gitChangesPanelEnabled = prefs.featureFlags?.gitChangesPanel === true;
   const sessionFileBrowserEnabled = prefs.featureFlags?.sessionFileBrowser === true;
+  const localComputerUseEnabled = prefs.featureFlags?.localComputerUse === true;
+  const toggleLocalComputerUse = () => setPrefs((previous) => ({
+    ...previous, featureFlags: { ...previous.featureFlags, localComputerUse: !previous.featureFlags?.localComputerUse },
+  }));
   const toggleSessionFileBrowser = () => setPrefs((previous) => ({
     ...previous,
     featureFlags: { ...previous.featureFlags, sessionFileBrowser: !previous.featureFlags?.sessionFileBrowser },
@@ -38,5 +42,7 @@ export function useFeatureFlagsPreferences() {
     toggleGitChangesPanel,
     sessionFileBrowserEnabled,
     toggleSessionFileBrowser,
+    localComputerUseEnabled,
+    toggleLocalComputerUse,
   };
 }

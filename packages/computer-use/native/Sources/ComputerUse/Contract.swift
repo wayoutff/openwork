@@ -280,7 +280,7 @@ enum ObservationPreparation {
 /// Shares the Mac with the person using it. The agent takes the front only for
 /// the moment it needs to look or act, then gives it back to the app that had it.
 /// Moving the mouse never holds the agent up; a click or key press during its
-/// moment stops that step. Only Take over pauses the agent for Continue.
+/// moment stops that step. Retaining the front is a host-only opt-in.
 enum SharedDesktop {
     static let refocusLimit = 2
     /// Keys this recent mean the person is mid-typing.
@@ -290,6 +290,41 @@ enum SharedDesktop {
     /// Calls closer together than this are one moment, with no hand-back between them.
     static let handBackDelay: TimeInterval = 0.4
     static let poll: TimeInterval = 0.05
+
+    struct FrontPolicy {
+        static let hostVariable = "OPENWORK_COMPUTER_USE_KEEP_FRONT"
+        let enabled: Bool
+
+        init(environment: [String: String]) {
+            enabled = environment[Self.hostVariable] == "1"
+        }
+        func retains(mode: AccessMode, delivery: InputDelivery) -> Bool {
+            enabled && mode == .control && delivery == .foreground
+        }
+        func handBackDelay(mode: AccessMode, delivery: InputDelivery) -> TimeInterval? {
+            retains(mode: mode, delivery: delivery) ? nil : SharedDesktop.handBackDelay
+        }
+    }
+
+    /// One continuous foreground interval, not a new input baseline on each call.
+    /// A yielded interval cannot restart without the person's explicit Continue.
+    struct RetainedFront {
+        private(set) var since: TimeInterval?
+        private(set) var yielded = false
+
+        mutating func begin(at now: TimeInterval) {
+            guard since == nil, !yielded else { return }
+            since = now
+        }
+        mutating func check(lastPersonInput: TimeInterval, focusChanged: Bool) -> Bool {
+            guard let since, !yielded else { return yielded }
+            if lastPersonInput > since || focusChanged { yield() }
+            return yielded
+        }
+        mutating func yield() { since = nil; yielded = true }
+        mutating func resume(at now: TimeInterval) { since = now; yielded = false }
+        mutating func close() { since = nil; yielded = false }
+    }
 
     // Input times come from the HID system state, which only physical devices
     // update. The agent's events go to one process and never enter it, so every

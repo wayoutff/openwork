@@ -61,6 +61,26 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "computerKeepFront": {
+              "enum": [
+                "",
+                "true",
+                "false",
+                true,
+                false
+              ],
+              "description": "Keep agent window in front: Allow an opt-in preference to leave the foreground computer-use window active between steps without locking focus. Renders DEN_FEATURE_COMPUTER_KEEP_FRONT."
+            },
+            "localComputerUse": {
+              "enum": [
+                "",
+                "true",
+                "false",
+                true,
+                false
+              ],
+              "description": "Local Computer Use: Opt in to Computer Use in an isolated signed local developer profile without a cloud account. Renders DEN_FEATURE_LOCAL_COMPUTER_USE."
+            },
             "sessionFileBrowser": {
               "enum": [
                 "",

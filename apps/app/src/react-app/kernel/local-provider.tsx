@@ -52,6 +52,8 @@ export type LocalPreferences = {
     workspaceRunMode: boolean;
     gitChangesPanel?: boolean;
     sessionFileBrowser?: boolean;
+    localComputerUse?: boolean;
+    computerKeepFront?: boolean;
   };
   /**
    * Set to true after the user completes the welcome/onboarding flow

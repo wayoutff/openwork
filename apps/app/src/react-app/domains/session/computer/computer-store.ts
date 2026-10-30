@@ -5,6 +5,7 @@ import type { ComputerRequest } from "@openwork/types/desktop-ipc"
 import { desktopBridge } from "@/app/lib/desktop"
 import { isActiveWorkSessionStatus } from "../sidebar/utils"
 import { useDesktopFeature } from "../status/use-desktop-feature"
+import { useLocal } from "@/react-app/kernel/local-provider"
 
 type ComputerStore = {
   /** Chats whose agent is waiting for computer use: setup or the person's allowance. */
@@ -40,6 +41,12 @@ export function ComputerBridge() {
   const enabled = useDesktopFeature("computerUse")
   const remote = useDesktopFeature("remoteComputers")
   const background = useDesktopFeature("computerUseBackground")
+  const keepFrontAvailable = useDesktopFeature("computerKeepFront")
+  const { prefs } = useLocal()
+  const keepFront = prefs.featureFlags?.computerKeepFront === true
+  useEffect(() => {
+    void desktopBridge.computerSetKeepFrontEnabled(enabled && keepFrontAvailable && keepFront).catch(() => {})
+  }, [enabled, keepFrontAvailable, keepFront])
   useEffect(() => {
     void desktopBridge.computerSetRemoteEnabled(enabled && remote).catch(() => {})
   }, [enabled, remote])
