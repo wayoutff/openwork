@@ -406,7 +406,7 @@ export function createLocalComputerAdapter({
       const hex = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
       const shown = typeof presence?.name === "string" && presence.name.trim() && hex(presence.color)
         ? { OPENWORK_COMPUTER_USE_PRESENCE: JSON.stringify({ name: presence.name.trim().slice(0, 32), color: presence.color }) } : {};
-      // Set only while `computerUseBackground` is on: the helper then works behind other windows.
+      // Parallel local sessions work behind other windows; the helper chooses foreground when an app needs it.
       const delivery = background ? { OPENWORK_COMPUTER_USE_DELIVERY: "background" } : {};
       // Explicit off also overrides any environment inherited by the MCP transport.
       const transport = new StdioClientTransport({ command: state.binary, args: ["mcp-embedded"], env: { ...env, ...shown, ...delivery, OPENWORK_COMPUTER_USE_KEEP_FRONT: keepFront === true ? "1" : "0" }, stderr: "ignore" });

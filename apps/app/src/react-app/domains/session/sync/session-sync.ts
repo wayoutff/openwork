@@ -35,6 +35,7 @@ import {
 import {
   parseDynamicToolUIPart,
   parseStructuredOutputUIPart,
+  withToolAttachmentOwner,
   reasoningTime,
   STRUCTURED_OUTPUT_TOOL,
 } from "./parse-tool-parts";
@@ -994,7 +995,7 @@ function toUIParts(part: Part): UIMessage["parts"] {
   if (!mapped) return [];
   if (part.type === "tool" && part.tool === STRUCTURED_OUTPUT_TOOL) return [mapped];
   if (part.type === "tool" && part.state.status === "completed" && part.state.attachments) {
-    return [mapped, ...part.state.attachments.flatMap(toFileUIParts)];
+    return [mapped, ...withToolAttachmentOwner(part.state.attachments.flatMap(toFileUIParts), part.callID)];
   }
   return [mapped];
 }
@@ -1266,7 +1267,7 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
   }
 
   if (event.type === AUTO_ROUTES_EVENT) {
-    // Auto replies' routing decisions; any session, tracked or not, so a
+    // Smart replies' routing decisions; any session, tracked or not, so a
     // background chat shows them once opened.
     const props = event.properties;
     if (!props || typeof props !== "object") return;

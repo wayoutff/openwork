@@ -15,7 +15,6 @@ import {
   Archive,
   ArchiveRestore,
   Blocks,
-  CalendarDays,
   CheckCheck,
   Folder,
   Clock3,
@@ -170,6 +169,7 @@ import { WorkspaceAvatarPicker } from "./workspace-avatar-picker";
 import { isSameWorkbenchSession, useWorkbenchStore } from "../chat/workbench-store";
 import { SidebarDestination } from "./sidebar-destination";
 import { SessionTitle } from "./session-title";
+import { isKeyboardFocus } from "./session-title-marquee";
 import { getSessionOrder } from "./session-order";
 import { SESSION_DRAG_TYPE, SessionDragScope, SessionReorderList, useDraggedSession, useSessionReorderTarget } from "./session-reorder";
 
@@ -760,9 +760,8 @@ export type AppSidebarProps = {
   automationsActive?: boolean;
   automationsNeedAttention?: boolean;
   onOpenAutomations?: () => void;
-  calendarActive?: boolean;
-  onOpenCalendar?: () => void;
   dashboardActive?: boolean;
+  dashboardLabel?: string;
   onOpenDashboard?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
@@ -949,7 +948,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.dashboardActive === true}
                 icon={Blocks}
-                label="Dashboard"
+                label={props.dashboardLabel ?? "Dashboard"}
                 onSelect={props.onOpenDashboard}
               />
             ) : null}
@@ -971,14 +970,6 @@ export function AppSidebar(props: AppSidebarProps) {
                   </span>
                 )}
                 onSelect={props.onOpenAutomations}
-              />
-            ) : null}
-            {props.onOpenCalendar ? (
-              <SidebarDestination
-                active={props.calendarActive === true}
-                icon={CalendarDays}
-                label="Calendar"
-                onSelect={props.onOpenCalendar}
               />
             ) : null}
             <SidebarDestination
@@ -1611,7 +1602,7 @@ function WorkspaceHeader({
           if (event.pointerType === "mouse") setIsTitleHovered(true);
         }}
         onPointerLeave={() => setIsTitleHovered(false)}
-        onFocus={() => setIsTitleFocused(true)}
+        onFocus={(event) => setIsTitleFocused(isKeyboardFocus(event.currentTarget))}
         onBlur={() => setIsTitleFocused(false)}
         onClick={handleSelectWorkspace}
       >
@@ -1911,7 +1902,7 @@ function DraftSessionRow({ workspaceId, groupId, title, pending }: { workspaceId
         }}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
-        onFocus={() => setFocused(true)}
+        onFocus={(event) => setFocused(isKeyboardFocus(event.currentTarget))}
         onBlur={() => setFocused(false)}
       >
         <SessionStatusIndicator isActiveWork={false} isUnread={false} />
@@ -2619,9 +2610,7 @@ export function SessionMenuItem({
             onClick={openSession}
             onPointerEnter={handlePointerEnter}
             onPointerLeave={() => setIsTitleHovered(false)}
-            onFocus={() => {
-              setIsTitleFocused(true);
-            }}
+            onFocus={(event) => setIsTitleFocused(isKeyboardFocus(event.currentTarget))}
             onBlur={() => setIsTitleFocused(false)}
             aria-label={accessibleState}
             aria-description={shortcutDigit === undefined ? undefined : sessionNumberShortcutDescription(ctx.sessionNumberShortcutOs, shortcutDigit)}

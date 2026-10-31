@@ -45,7 +45,11 @@ Organization server: `http://localhost:3005`, API: `http://localhost:8788`.
 инструментов должно пересчитываться по фактической модели текущего чата.
 
 В launcher Den явно включены operator flags COMPUTER_USE, GIT_CHANGES_PANEL,
-SESSION_FILE_BROWSER. Фоновое управление и удалённые компьютеры выключены.
+SESSION_FILE_BROWSER. Удалённые компьютеры выключены. После upstream-синхронизации
+2026-10-31 отдельный computerUseBackground удалён upstream: background delivery
+теперь часть Computer Use на поддерживаемых parallel-адаптерах. Keep agent window
+in front сохраняется для foreground-шагов, но не принуждает background-действия
+выводить окно вперёд.
 Это политика собственного self_hosted deployment, не обход hosted-политики.
 Public signup закрыт, bootstrap первого администратора после регистрации
 недоступен. Reset базы для повторной регистрации запрещён.
