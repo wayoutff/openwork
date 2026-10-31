@@ -6,10 +6,7 @@ import { builtAppSummary } from "@/react-app/domains/apps/built-mcp-app-model"
 import { AppBuilderStep } from "./app-builder-step"
 import * as React from "react"
 import {
-  AlertTriangle,
   Check,
-  ChevronRight,
-  CirclePause,
   Copy,
   Download,
   FileIcon,
@@ -34,7 +31,6 @@ import { openDesktopUrl, revealDesktopItemInDir } from "@/app/lib/desktop"
 import { isElectronRuntime } from "@/app/lib/runtime-env"
 import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX } from "@/app/types"
 import { t } from "@/i18n"
-import { markFeatureUsed } from "@/app/lib/den"
 import { useOpenTargets } from "@/lib/target-provider"
 import { openTargetFromUrl } from "@/react-app/domains/session/artifacts/open-target"
 import { presentOpencodeSessionError, sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
@@ -47,7 +43,6 @@ import { OpenWorkModelsLimitCard } from "@/react-app/domains/cloud/usage-limit-c
 import type { OpenWorkModelsLimit } from "@/react-app/domains/cloud/usage-limit-state"
 import { rejectedRecoveryFromMessage } from "@/react-app/domains/session/sync/rejected-turn"
 import { replyModelLabel, replyModelProvider } from "@/react-app/domains/session/sync/reply-model"
-import { useLiveReplyModel } from "@/components/chat/live-reply-model-store"
 import { ProviderIcon } from "@/react-app/design-system/provider-icon"
 import { openAlternativeModelPicker } from "@/app/lib/inference-access"
 import { ApplyPatchTool } from "@/components/tools/apply-patch"
@@ -67,7 +62,6 @@ import { TodoWriteTool } from "@/components/tools/todowrite"
 import { WebfetchTool } from "@/components/tools/webfetch"
 import { WebsearchTool } from "@/components/tools/websearch"
 import { useMessageList, useSessionErrorMessage } from "@/components/chat/message-list-provider"
-import { useOrgFeature } from "@/react-app/domains/cloud/use-org-feature"
 import { TaskSuggestions } from "@/components/chat/task-suggestions"
 import { useSessionReferencesMaybe, type SessionReferences } from "@/components/chat/session-reference-context"
 import { SessionReferenceLink } from "@/components/chat/session-reference-link"
@@ -111,8 +105,7 @@ import { CreatedSkillCard, CreatedSkillsContext, useCreatedSkills, type CreatedS
 import { readCreatedSkillAccess } from "@/components/chat/created-skill-access"
 import { collectCreatedSkills, type ConfirmedSkillAccess, type CreatedSkillsModel } from "@/lib/created-skill"
 import { openWorkNativeFailure } from "@/lib/openwork-native-activity"
-import { LaneChevron, LeadingLane, RailMeta, TextSentenceLine, TrailingChevron } from "@/components/chat/activity-rail"
-import { useTextActivityRail } from "@/components/chat/text-activity-rail-store"
+import { TextSentenceLine, TrailingChevron } from "@/components/chat/activity-rail"
 import { ConnectionCard } from "@/components/chat/connection-card"
 import { CredentialPromptCard } from "@/components/chat/credential-prompt-card"
 import { credentialPromptCall } from "@/components/chat/credential-prompt"
@@ -126,7 +119,7 @@ import { ReasoningBlock } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
 import { RemoteThreadRunLine } from "@/components/chat/remote-thread-run-line"
 import { isRemoteThreadStatusCheck, remoteThreadFromToolPart, type RemoteThreadStart } from "@/lib/remote-session-thread"
-import { useRemoteThreadsEnabled, useReviveRemoteThread } from "@/react-app/domains/session/remote-threads/remote-thread-store"
+import { useReviveRemoteThread } from "@/react-app/domains/session/remote-threads/remote-thread-store"
 import { ToolAggregateGroup } from "@/components/chat/tool-aggregate-group"
 import {
   CurrentToolLifecycleProvider,
@@ -164,6 +157,9 @@ import { cn } from "@/lib/utils"
 import { DevProfiler } from "@/react-app/shell/dev-profiler"
 import { groupMessages, isMessageGroup, getLastTextPart, getAggregateOnlyParts, getAssistantRenderGroups, getFileTitle, getMediaBadge, getMessageCompleted, getMessageCreated, getRunStartedAt, getWaitedMs, formatMessageTimestamp, splitTurnAtAnswer, type UIMessageWithIndex, getMessagesText, getSafeFileDownloadUrl, getSafeFileRevealPath } from "./utils"
 import type { AnyToolPart } from "@/lib/tool-aggregate"
+import { collectComputerSessionHistory, withoutComputerHistory, type ComputerSessionHistory as ComputerHistory } from "@/lib/computer-session-history"
+import { ComputerSessionHistory } from "./computer-session-history"
+import { useComputerSessionHistoryStore } from "./computer-session-history-store"
 import { resolveConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
 
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
@@ -184,6 +180,7 @@ const AppPanelFoldContext = React.createContext(false)
 const NO_PINNED_REMOTE_THREADS: ReadonlySet<string> = new Set()
 const PinnedRemoteThreadsContext = React.createContext<ReadonlySet<string>>(NO_PINNED_REMOTE_THREADS)
 const ParentRunActiveContext = React.createContext(true)
+const ComputerHistoryContext = React.createContext<ComputerHistory | null>(null)
 
 function MessageTimestamp({ message, className }: { message: UIMessage; className?: string }) {
   const created = getMessageCreated(message)
@@ -269,23 +266,21 @@ function isReservedConnectionQuestionPart(part: ToolUIPart | DynamicToolUIPart):
 
 const ToolMessageInner = ({ part }: ToolMessageProps) => {
   const { connectorIdentities, onMcpReconnect, onMcpReopenAuthorization, connectionQuestionToolCallId, getConnectionDecision } = useMessageList()
-  const remoteThreads = useRemoteThreadsEnabled()
   const pinnedRemoteThreads = React.useContext(PinnedRemoteThreadsContext)
   // The agent following up on a task the chat shows makes it run again.
-  useReviveRemoteThread(remoteThreads && part.type === "dynamic-tool" ? part : null)
+  useReviveRemoteThread(part.type === "dynamic-tool" ? part : null)
   const parentActive = React.useContext(ParentRunActiveContext)
   const resolveLifecycle = useCurrentToolLifecycleResolver()
   const lifecycle = resolveLifecycle(part.toolCallId, isToolPartInFlight(part))
   const connectionCardParts = React.useContext(ConnectionCardPartsContext)
   const appCreationParts = React.useContext(AppCreationPartsContext)
   const appPanelFold = React.useContext(AppPanelFoldContext)
-  const textRail = useTextActivityRail()
   if (appCreationParts.has(part.toolCallId)) return null
   if (part.toolCallId === connectionQuestionToolCallId || isReservedConnectionQuestionPart(part)) return null
   const promptCall = credentialPromptCall(part)
-  const remoteStart = remoteThreads && part.type === "dynamic-tool" ? remoteThreadFromToolPart(part) : null
+  const remoteStart = part.type === "dynamic-tool" ? remoteThreadFromToolPart(part) : null
   const calls = part.type === "dynamic-tool" ? codeModeToolCalls(part) : null
-  const remoteStarts = remoteThreads && calls && part.type === "dynamic-tool" ? (codeModeCallsWithResults(part) ?? []).flatMap((call) => {
+  const remoteStarts = calls && part.type === "dynamic-tool" ? (codeModeCallsWithResults(part) ?? []).flatMap((call) => {
     const start = remoteThreadFromToolPart(call)
     return start ? [{ start, call }] : []
   }) : []
@@ -319,27 +314,11 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
     }
   }
 
-  if (lifecycle === "waiting" && textRail) {
+  if (lifecycle === "waiting") {
     // Text-first: waiting on the person is one amber sentence; the decision itself sits above the composer (T4).
     return (
       <div className="flex min-h-6.5 items-center text-sm" data-tool-lifecycle="waiting" role="status">
         <TextSentenceLine verb={t("text_activity.waiting_for_you")} tone="waiting" />
-      </div>
-    )
-  }
-
-  if (lifecycle === "waiting") {
-    return (
-      <div
-        className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground"
-        data-tool-lifecycle="waiting"
-        role="status"
-      >
-        <CirclePause aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-        <div>
-          <div className="font-medium">Waiting for your action</div>
-          <div className="text-xs text-amber-11">Choose an option or approve the request to continue.</div>
-        </div>
       </div>
     )
   }
@@ -478,13 +457,13 @@ function stepsNeedAttention(items: UIMessageWithIndex[], connectionCards: Readon
   }))
 }
 
-function withoutSilentSteps(messages: UIMessage[], remoteThreads: boolean): UIMessage[] {
+function withoutSilentSteps(messages: UIMessage[]): UIMessage[] {
   let changed = false
   const next = messages.flatMap((message) => {
     if (message.role !== "assistant") return [message]
     // With tasks on other computers shown live, the agent's own checks on them are plumbing.
     const parts = message.parts.filter((part) => !(part.type === "dynamic-tool"
-      && (isSilentCodeModePart(part) || isSilentAppLookup(part) || remoteThreads && isRemoteThreadStatusCheck(part))))
+      && (isSilentCodeModePart(part) || isSilentAppLookup(part) || isRemoteThreadStatusCheck(part))))
     if (parts.length === message.parts.length) return [message]
     changed = true
     return parts.length > 0 ? [{ ...message, parts }] : []
@@ -688,13 +667,13 @@ type AssistantMessageProps = {
 const AssistantMessage = React.memo(
   ({ message, isStreaming, hideReasoning }: AssistantMessageProps) => {
     const { showThinking, highlightQuery } = useMessageList()
-    const textRail = useTextActivityRail()
+    const computerHistory = React.useContext(ComputerHistoryContext)
     const assistantRenderGroups = React.useMemo(
       () => {
-        const groups = getAssistantRenderGroups(message.parts, showThinking)
+        const groups = getAssistantRenderGroups(withoutComputerHistory(message.parts, computerHistory), showThinking)
         return hideReasoning ? groups.filter((group) => group.kind !== "reasoning") : groups
       },
-      [hideReasoning, message.parts, showThinking]
+      [hideReasoning, message.parts, showThinking, computerHistory]
     )
 
     return (
@@ -712,12 +691,11 @@ const AssistantMessage = React.memo(
               // to the rail's left (DESIGN.md T1 — one quiet rail).
               return (
                 <div key={`text-${index}`} className="flex min-w-0 items-start gap-2">
-                  <LeadingLane />
                   <MessageContent
                     className="text-foreground prose w-full min-w-0 flex-1 rounded-lg bg-transparent p-0"
                     markdown
                     sessionReferences
-                    githubReferences={textRail}
+                    githubReferences
                     isStreaming={isStreaming}
                     highlightQuery={highlightQuery}
                   >
@@ -1154,7 +1132,6 @@ const MessageComponent = React.memo(
           canRetry={isLastMessage && !isStreaming}
           technicalDetails={presentation?.technicalDetails}
           gatewayConnectUrl={presentation?.kind === "gateway-auth-required" || presentation?.kind === "provider-credentials" ? presentation.connectUrl ?? null : undefined}
-          gatewayProviderAuthError={presentation?.kind === "gateway-provider-authentication-failed" || presentation?.kind === "gateway-provider-permission-denied"}
           gatewaySelectionRequired={presentation?.kind === "gateway-selection-required"}
           changeModel={presentation !== null && ["provider-access-denied", "provider-unavailable", "provider-unreachable", "model-unavailable", "rate-limited", "conversation-too-long", "attachment-unsupported"].includes(presentation.kind)}
         />
@@ -1214,7 +1191,7 @@ type WorkingModel = { label: string; providerId?: string }
 const LoadingMessage = React.memo(({ elapsedSeconds, starting, backgroundShells = NO_BACKGROUND_SHELLS, backgroundStale = false, model = null }: {
   elapsedSeconds: number
   starting: boolean
-  /** Feature `liveReplyModel`: the model writing this turn, shown on hover after the timer. */
+  /** The model writing this turn, shown on hover after the timer. */
   model?: WorkingModel | null
   /** Commands left running in the background share this line while the turn runs. */
   backgroundShells?: BackgroundShell[]
@@ -1241,7 +1218,6 @@ const LoadingMessage = React.memo(({ elapsedSeconds, starting, backgroundShells 
         {model ? (
           <span
             data-working-model=""
-            onMouseEnter={() => markFeatureUsed("liveReplyModel")}
             className="opacity-0 transition-opacity duration-150 ease-out group-hover/working:opacity-100 pointer-coarse:opacity-100 motion-reduce:transition-none"
           >
             <span aria-hidden="true"> · </span>
@@ -1322,26 +1298,16 @@ interface ErrorMessageProps {
    * null deep-links to Settings > AI providers instead.
    */
   gatewayConnectUrl?: string | null
-  gatewayProviderAuthError?: boolean
   gatewaySelectionRequired?: boolean
   changeModel?: boolean
 }
 
-function ErrorMessage({ error, description, showDescriptionOnResume, resumePrompt, canRetry = true, technicalDetails, gatewayConnectUrl, gatewaySelectionRequired, gatewayProviderAuthError, changeModel }: ErrorMessageProps) {
+function ErrorMessage({ error, description, showDescriptionOnResume, resumePrompt, canRetry = true, technicalDetails, gatewayConnectUrl, gatewaySelectionRequired, changeModel }: ErrorMessageProps) {
   const { onResumeInterrupted, dispatchAction, sessionId } = useMessageList()
-  const gatewayProviderAuthEnabled = useOrgFeature("gatewayProviderAuthErrors")
-  const useGatewayProviderAuthCopy = gatewayProviderAuthError && gatewayProviderAuthEnabled
   const selection = error?.includes("gateway_selection_required") ? presentOpencodeSessionError(error) : null
-  const displayError = gatewayProviderAuthError && !gatewayProviderAuthEnabled
-    ? "Check your model connection"
-    : selection?.title ?? error
-  const displayDescription = gatewayProviderAuthError && !gatewayProviderAuthEnabled
-    ? "Update your connection in model settings."
-    : selection?.description ?? description
-  const displayDetails = selection?.technicalDetails ?? technicalDetails
-  const displayTechnicalDetails = gatewayProviderAuthError && !gatewayProviderAuthEnabled
-    ? displayDetails?.split("\n").filter((line) => !line.startsWith("Request ID:")).join("\n")
-    : displayDetails
+  const displayError = selection?.title ?? error
+  const displayDescription = selection?.description ?? description
+  const displayTechnicalDetails = selection?.technicalDetails ?? technicalDetails
   const resumable = Boolean(resumePrompt && onResumeInterrupted)
   return (
     <TaskRecovery title={displayError ?? "Task failed"} state={resumable ? "paused" : "failed"}
@@ -1349,18 +1315,16 @@ function ErrorMessage({ error, description, showDescriptionOnResume, resumePromp
       description={showDescriptionOnResume && displayDescription
         ? <span data-testid="session-error-interruption-warning">{displayDescription}</span>
         : !resumePrompt ? displayDescription : null}
-      technicalDetails={useGatewayProviderAuthCopy ? displayDetails : displayTechnicalDetails}
+      technicalDetails={displayTechnicalDetails}
       onRetry={canRetry && resumable && resumePrompt ? () => onResumeInterrupted?.(resumePrompt) : undefined}
       retryTestId="session-error-resume"
-      actions={gatewaySelectionRequired || selection || changeModel || gatewayConnectUrl !== undefined || (gatewayProviderAuthError && !gatewayProviderAuthEnabled) ? <>
+      actions={gatewaySelectionRequired || selection || changeModel || gatewayConnectUrl !== undefined ? <>
         {gatewaySelectionRequired || selection ? <Button variant="ghost" size="xs" data-testid="session-error-gateway-selection"
           onClick={() => openAlternativeModelPicker(sessionId)}>
           Choose group and credential set
         </Button> : null}
         {changeModel && !gatewaySelectionRequired && !selection ? <Button variant="ghost" size="xs"
           onClick={() => openAlternativeModelPicker(sessionId)}>Change model</Button> : null}
-        {gatewayProviderAuthError && !gatewayProviderAuthEnabled ? <Button variant="ghost" size="xs" data-testid="session-error-gateway-connect"
-          onClick={() => dispatchAction({ target: "settings", action: "open", section: "providers" })}>Connect</Button> : null}
         {gatewayConnectUrl !== undefined ? <Button variant="ghost" size="xs" data-testid="session-error-gateway-connect"
           onClick={() => dispatchAction({ target: "settings", action: "open", section: "providers" })}>Connect</Button> : null}
       </> : null} />
@@ -1486,24 +1450,19 @@ function LiveSteps({ children, active }: { children: React.ReactNode; active: bo
  * unprompted; once the answer is in, the reasoning is available but out
  * of the way.
  */
-function CompletedStepRun({ label, count, modelLabel, children }: { label: string; count?: string | null; modelLabel?: string | null; children: React.ReactNode }) {
+function CompletedStepRun({ label, count, children }: { label: string; count?: string | null; children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
   // Text-first: "Worked for 43m 29s ›", no step count beside it.
-  const textRail = useTextActivityRail()
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="flex w-full flex-col gap-2">
       <div className="mx-auto flex w-full max-w-3xl px-2 md:px-10">
         <CollapsibleTrigger
           className="group flex min-h-6 cursor-pointer items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          aria-label={`${label}${count ? `, ${count}` : ""}${modelLabel ? ` · ${modelLabel}` : ""}. ${open ? "Hide steps" : "Show steps"}`}
+          aria-label={`${label}${count ? `, ${count}` : ""}. ${open ? "Hide steps" : "Show steps"}`}
           data-testid="completed-work-rail"
         >
-          {/* The chevron sits in the rail's 20px leading lane, so step labels line up below it. */}
-          <LaneChevron open={open} />
           <span>{label}</span>
-          {count && !textRail ? <RailMeta>{count}</RailMeta> : null}
-          {modelLabel ? <span data-testid="reply-model"> · {modelLabel}</span> : null}
           <TrailingChevron open={open} />
         </CollapsibleTrigger>
       </div>
@@ -1594,9 +1553,9 @@ function MessageGroup({
     () => panelLive ? appBuildActivity(items.map(item => item.message), creationParts, showThinking) : null,
     [panelLive, items, creationParts, showThinking],
   )
-  const remoteThreads = useRemoteThreadsEnabled()
-  const textRail = useTextActivityRail()
-  const remoteThreadStarts = React.useMemo(() => remoteThreads ? collectRemoteThreadStarts(items) : [], [items, remoteThreads])
+  const remoteThreadStarts = React.useMemo(() => collectRemoteThreadStarts(items), [items])
+  const computerHistoryEnabled = useComputerSessionHistoryStore(state => state.enabled)
+  const computerHistory = React.useMemo(() => computerHistoryEnabled ? collectComputerSessionHistory(items.map(item => item.message)) : null, [computerHistoryEnabled, items])
   // The skill this turn produced stays in view as its result, even when the
   // steps fold; later updates and shares change this card, not add another.
   const { cards: createdSkillCards } = useCreatedSkills()
@@ -1684,7 +1643,7 @@ function MessageGroup({
       (total, item) =>
         total +
         (item.message.role === "assistant" && !isSessionErrorMessage(item.message)
-          ? getAssistantRenderGroups(item.message.parts, showThinking).reduce(
+          ? getAssistantRenderGroups(withoutComputerHistory(item.message.parts, computerHistory), showThinking).reduce(
             (rows, group) => rows + (group.kind === "tool-aggregate" ? group.parts.length + group.thoughts.length : 1),
             0
           )
@@ -1765,6 +1724,8 @@ function MessageGroup({
       run = null
     }
     slice.forEach((item, sliceIndex) => {
+      if (computerHistory && item.message.role === "assistant" && !isSessionErrorMessage(item.message)
+        && getAssistantRenderGroups(withoutComputerHistory(item.message.parts, computerHistory), showThinking).length === 0) return
       const aggregateParts =
         item.message.role === "assistant" && !isSessionErrorMessage(item.message)
           ? getAggregateOnlyParts(item.message, showThinking)
@@ -1787,6 +1748,7 @@ function MessageGroup({
       <AppPanelFoldContext.Provider value={panelLive}>
       <PinnedRemoteThreadsContext.Provider value={pinnedRemoteIds}>
       <ConnectionCardPartsContext.Provider value={connectionCardParts}>
+      <ComputerHistoryContext.Provider value={computerHistory}>
       <ActionContextMenu
         actions={replyMenuActions}
         contentClassName="w-56"
@@ -1797,22 +1759,17 @@ function MessageGroup({
       {/* The scroll area keeps the same 8px rhythm the parts inside a single
           message use, so a step row is spaced identically whether or not a
           message boundary happens to fall between it and the previous row. */}
-      {/* A finished turn kept open (it needs the person, T2) still says how long it worked,
-          on the same line the fold would use: lane, duration, quiet count (C7). */}
+      {/* A finished turn kept open (it needs the person, T2) still reports its work duration. */}
       {!isLiveGroup && resolvedReplyModel && !collapseSteps && replySummaryLabel ? <div data-testid="completed-work-rail" data-completed-work-rail="open" className="mx-auto flex w-full max-w-3xl px-2 md:px-10">
         <div className="flex min-h-6 items-center gap-2 text-xs text-muted-foreground">
-          <LeadingLane />
           <span>{replyWorkedLabel ?? replySummaryLabel}</span>
-          {replyWorkedLabel && stepCountLabel && !textRail ? <RailMeta>{stepCountLabel}</RailMeta> : null}
         </div>
       </div> : null}
-      {stepItems.length > 0 ? (
+      {stepItems.length > 0 && stepRowCount > 0 ? (
         collapseSteps ? (
           <CompletedStepRun
             label={(resolvedReplyModel ? replyWorkedLabel : null) ?? stepRunLabel}
-            // "2 steps" is quiet metadata beside the duration, not a middle-dot string (C7).
             count={((resolvedReplyModel ? replyWorkedLabel : null) ?? stepRunLabel).startsWith("Worked for") ? stepCountLabel : null}
-            modelLabel={null}
           >
             <div className="flex flex-col gap-2">
               {renderItems(stepItems, 0)}
@@ -1835,6 +1792,9 @@ function MessageGroup({
         </Message>
       ))}
       {renderItems(proseItems, stepItems.length, collapseSteps || panelLive)}
+      {computerHistory ? <Message className="mx-auto flex w-full max-w-3xl flex-col px-2 md:px-10">
+        <ComputerSessionHistory key={computerHistory.id} history={computerHistory} active={isLiveGroup && parentActive} renderAction={part => <ToolMessage part={part} />} />
+      </Message> : null}
       {groupSkillCards.length > 0 ? (
         <div data-created-skills="" className="mx-auto mt-1 flex w-full max-w-3xl flex-col gap-2 px-2 md:px-10">
           {groupSkillCards.map((card) => <CreatedSkillCard key={card.kind === "ready" ? card.skillId : card.key} card={card} />)}
@@ -1881,6 +1841,7 @@ function MessageGroup({
         </div>
       )}
       </ActionContextMenu>
+      </ComputerHistoryContext.Provider>
       </ConnectionCardPartsContext.Provider>
       </PinnedRemoteThreadsContext.Provider>
       </AppPanelFoldContext.Provider>
@@ -1953,17 +1914,15 @@ export function shouldShowRunReconnecting(status: ThreadStatus, syncDegraded: bo
 
 export function MessageList({ messages, messageIdReplacements, status, activityStatus, retryStatus, syncHealth, viewport, sessionErrorHandled = false }: MessageListProps) {
   const { workspaceId, sessionId, onStopSubagentSession, resolveReplyModelTitle, autoRoutes, resolveAutoRouteName } = useMessageList()
-  const liveReplyModel = useLiveReplyModel()
   // Only this turn's reply: before it starts there is no model to show, never the previous turn's.
   const workingModel = React.useMemo<WorkingModel | null>(() => {
-    if (!liveReplyModel) return null
     const lastUser = messages.findLastIndex((message) => message.role === "user")
     const reply = messages.slice(lastUser + 1).findLast((message) => message.role === "assistant")
     const label = reply ? replyModelLabel(reply, resolveReplyModelTitle, autoRoutes, resolveAutoRouteName) : null
     if (!reply || !label) return null
     const providerId = replyModelProvider(reply, autoRoutes)
     return providerId ? { label, providerId } : { label }
-  }, [liveReplyModel, messages, resolveReplyModelTitle, autoRoutes, resolveAutoRouteName])
+  }, [messages, resolveReplyModelTitle, autoRoutes, resolveAutoRouteName])
   const runningShells = useBackgroundShellStore((state) => state.booksByWorkspaceId[workspaceId]?.running)
   const backgroundShells = React.useMemo(
     () => sessionBackgroundShells(runningShells, sessionId),
@@ -2038,8 +1997,7 @@ export function MessageList({ messages, messageIdReplacements, status, activityS
   }, [activityActive, runStartedAt, syncDegraded, runWaits])
   const latestUserMessageId = React.useMemo(() => messages.findLast((message) => message.role === "user")?.id, [messages])
   // Steps that render nothing are removed before layout, so they leave no gap.
-  const remoteThreads = useRemoteThreadsEnabled()
-  const visibleMessages = React.useMemo(() => dedupeRenderedTurnErrors(withoutSilentSteps(messages, remoteThreads)), [messages, remoteThreads]);
+  const visibleMessages = React.useMemo(() => dedupeRenderedTurnErrors(withoutSilentSteps(messages)), [messages]);
   const items = React.useMemo(() => groupMessages(visibleMessages, status), [visibleMessages, status]);
   // groupMessages indexes the visible transcript. Comparing those positions
   // with the unfiltered transcript marks the live turn historical as soon as

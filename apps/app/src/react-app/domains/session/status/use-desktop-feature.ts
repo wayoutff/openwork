@@ -13,7 +13,7 @@ import { resolveLocalComputerFeature } from "./local-computer-feature"
 
 const FEATURE_STALE_MS = 30_000
 
-type DesktopFeatureKey = "computerUse" | "computerUseBackground" | "computerKeepFront" | "browserFloatingView" | "remoteComputers" | "mermaidZoom" | "providerCredentialStatus" | "desktopUpdateDownloadWindow" | "settledSessions" | "libraryDetailBreadcrumbs"
+type DesktopFeatureKey = "computerUse" | "computerKeepFront" | "computerSessionHistory" | "remoteComputers" | "desktopUpdateDownloadWindow" | "settledSessions"
 
 /**
  * Reads one desktop feature from the registry. Signed in, it follows the
@@ -25,7 +25,7 @@ export function useDesktopFeature(key: DesktopFeatureKey): boolean {
   const context = useAutomationsDenContext()
   const { prefs } = useLocal()
   const server = useServer()
-  const computerKey = ["computerUse", "computerUseBackground", "remoteComputers"].includes(key)
+  const computerKey = ["computerUse", "remoteComputers"].includes(key)
   const localHost = useQuery({
     queryKey: ["desktop", "local-computer-profile"],
     queryFn: () => desktopBridge.computerLocalProfile(),

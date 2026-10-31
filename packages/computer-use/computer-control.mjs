@@ -17,9 +17,9 @@ export const COMPUTER_TOOLS = Object.freeze({
 export const COMPUTER_PROTOCOL = "openwork.computer-use/1";
 export const COMPUTER_STOP_GUIDANCE = "Computer session revocation could not be confirmed. Use Stop on the agent's pill over the app window or in the OpenWork Computer Use menu before continuing.";
 const ARGUMENTS = Object.freeze({
-  computer_open: ["app_id", "pid", "window_id", "mode", "purpose"],
-  computer_observe: ["include_image", "elements"],
-  computer_act: ["observation_id", "action", "actions", "intent", "screenshot"],
+  computer_open: ["app_id", "pid", "window_id", "mode", "purpose", "screenshot"],
+  computer_observe: ["include_image", "elements", "menus"],
+  computer_act: ["observation_id", "action", "actions", "intent", "screenshot", "pacing", "retry_ms"],
   computer_zoom: ["observation_id", "x", "y", "width", "height"],
 });
 const failure = (code, message, extra = {}) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, code, message, ...extra }) }] });
@@ -36,6 +36,39 @@ const withHandoff = (result, status) => {
 const withPostObservation = (receipt, status, content = []) => ({ ...receipt, content: [...receipt.content,
   { type: "text", text: JSON.stringify({ post_observation: status, actions_replayed: false,
     ...(!status.ok ? { next: status.next, fresh_observation_required: true } : {}) }) }, ...content] });
+const observationPart = (content) => {
+  for (const [index, part] of content.entries()) {
+    if (part.type !== "text") continue;
+    let value;
+    try { value = JSON.parse(part.text); } catch { continue; }
+    if (value && typeof value.observation_id === "string" && Array.isArray(value.elements)) return { index, value };
+  }
+  return null;
+};
+/**
+ * An observation that lists only the elements changed since `previous`, the listing
+ * the model last saw in full. The helper keeps each control's ref across observations
+ * of a window (`refs: "stable"`), so refs the model holds stay valid; without that,
+ * on another window or element filter, or when most of the list changed, it is full.
+ * @param {{ window: unknown, filter: unknown, elements: Map<string, string> } | null | undefined} previous
+ * @param {Array<{ type: string, text?: string }>} content
+ */
+export function listChanges(previous, content) {
+  const found = observationPart(content);
+  if (!found) return { content, listing: null };
+  const { index, value } = found;
+  if (value.refs !== "stable") return { content, listing: null };
+  const listing = { window: value.window_id, filter: value.elements_filter,
+    elements: new Map(value.elements.map((element) => [element.ref, JSON.stringify(element)])) };
+  if (!previous || previous.window !== listing.window || previous.filter !== listing.filter) return { content, listing };
+  const changed = value.elements.filter((element) => previous.elements.get(element.ref) !== listing.elements.get(element.ref));
+  const removed = [...previous.elements.keys()].filter((ref) => !listing.elements.has(ref));
+  if (changed.length + removed.length > value.elements.length / 2) return { content, listing };
+  const compact = { ...value, elements: changed, elements_listing: "changes", elements_unchanged: value.elements.length - changed.length,
+    ...(removed.length ? { elements_removed: removed.slice(0, 200) } : {}),
+    elements_note: "Only elements that changed or appeared since your last observation are listed. Refs you already have stay valid unless listed in elements_removed." };
+  return { content: content.map((part, at) => at === index ? { type: "text", text: JSON.stringify(compact) } : part), listing };
+}
 const postWarning = (receipt, code, next = "observe") => withPostObservation(receipt, { ok: false, code, next,
   message: "The fresh observation is unavailable. The original receipt is unchanged; do not replay the input. Review the current control state before observing again." });
 /** Apps on this Mac the agent can drive through their own scripting interface. */
@@ -158,8 +191,6 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
   /** Per computer: whose control call has the keyboard and pointer, and who waits. */
   const slots = new Map();
   let featureEnabled = false;
-  // `computerUseBackground`: new sessions on a parallel computer work behind other windows.
-  let backgroundEnabled = false;
   // `computerKeepFront`: host policy for the local Mac helper only.
   let keepFrontEnabled = false;
   let keepFrontGeneration = 0;
@@ -673,7 +704,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
       if (Number.isSafeInteger(window) && others.some((other) => other.windowId === window)) {
         return failure("window_busy", "Another chat is working in this window. Choose another window, or wait for that chat to finish. Nothing was dispatched.");
       }
-      if (!own) leases.set(grant.sessionId, { grant, adapter: target, background: backgroundEnabled && target.parallel === true, keepFront: keepFrontEnabled && supportsKeepFront(target), controller: new AbortController(), nativeId: null, session: null, busy: false, handoffGeneration: 0 });
+      if (!own) leases.set(grant.sessionId, { grant, adapter: target, background: target.parallel === true, keepFront: keepFrontEnabled && supportsKeepFront(target), controller: new AbortController(), nativeId: null, session: null, busy: false, handoffGeneration: 0 });
       const current = leases.get(grant.sessionId);
       clearTimeout(current.idleTimer);
       current.busy = true;
@@ -783,7 +814,11 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
         }
         if (name !== "computer_discover") updateSession(current, result, name === "computer_open" ? args.purpose : undefined);
         if (!current.nativeId || name === "computer_close" || (!needsPerson(result) && current.session?.state !== "paused")) {
-          if (name === "computer_observe" && !result.isError && state.ok && typeof state.observation_id === "string") current.needsObservation = false;
+          if (name === "computer_observe" && !result.isError && state.ok && typeof state.observation_id === "string") {
+            current.needsObservation = false;
+            // The model now holds this full listing; a program's reads are not shown to it.
+            if (!call.program) current.listing = listChanges(null, result.content).listing;
+          }
           // A partial batch (later step refused) still landed input; the model
           // needs the settled view exactly as much as after a full dispatch.
           if (call.post) {
@@ -792,7 +827,11 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
               if (!postStillOwned(call) || current.needsObservation) return postWarning(result, "handoff_required", "human_takeover");
               // One read in this exact tool call, never a repeated input or a
               // continuation across a person takeover. Watch frames are unrelated.
-              const observation = await current.transport.callTool("computer_observe", { session_id: current.nativeId, include_image: call.includePostImage !== false }, { signal: active });
+              // Unless the model chose, the computer decides whether an image adds anything.
+              // Opening an app also lists its menu-bar commands, so the agent can run one at once.
+              const observation = await current.transport.callTool("computer_observe", { session_id: current.nativeId,
+                ...(call.postImage === undefined ? {} : { include_image: call.postImage }),
+                ...(name === "computer_open" && platform === "darwin" && current.adapter?.placement === "local" && !call.program ? { menus: true } : {}) }, { signal: active });
               progress(); assertUiActive(current);
               if (!postStillOwned(call)) return postWarning(result, "observation_withheld", "human_takeover");
               const observed = stateOf(observation);
@@ -805,7 +844,14 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
               updateSession(current, observation);
               current.needsObservation = false;
               call.post.captured = true;
-              call.post.result = withPostObservation(result, { ok: true }, observation.content);
+              // After the model's own act, list only what changed since the listing it holds.
+              // Programs read every element themselves and always get the full list.
+              let shown = observation.content;
+              if (!call.program) {
+                const listed = listChanges(name === "computer_act" ? current.listing : null, observation.content);
+                current.listing = listed.listing; shown = listed.content;
+              }
+              call.post.result = withPostObservation(result, { ok: true }, shown);
               return result;
             } catch {
               current.needsObservation = true;
@@ -849,7 +895,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
           // Technical cleanup retains access and human handoffs. No interrupted
           // action is retried; subsequent work starts from a fresh observation.
           if (name === "computer_open") current.expectedClose = true;
-          if (stateOf(result)?.ok === true && name === "computer_close") current.nativeId = null;
+          if (stateOf(result)?.ok === true && name === "computer_close") { current.nativeId = null; current.listing = null; }
           await cleanup(current);
         }
         if (result.isError) return result;
@@ -1112,15 +1158,13 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
       return false;
     },
     /**
-     * The renderer reports the `computerUseBackground` feature. A change hands
-     * idle sessions back, so each chat's next call reopens with the new setting;
-     * a call in flight keeps its own until it ends.
+     * Compatibility for older renderers. Background delivery is part of
+     * `computerUse` now; a stale child-flag value must not change its behavior.
+     * Remove with the corresponding desktop IPC when old renderers are unsupported.
+     * @param {boolean} [_enabled] Retired child-flag value; intentionally ignored.
      */
-    async setBackgroundEnabled(enabled) {
-      if (backgroundEnabled === (enabled === true)) return backgroundEnabled;
-      backgroundEnabled = enabled === true;
-      await Promise.all([...leases.values()].filter((current) => current.background !== (backgroundEnabled && current.adapter.parallel === true)).map((current) => release(current, true)));
-      return backgroundEnabled;
+    async setBackgroundEnabled(_enabled) {
+      return featureEnabled;
     },
     /** Change host focus policy without continuing a handoff or clearing Stop. */
     async setKeepFrontEnabled(enabled) {
@@ -1274,7 +1318,7 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
       try {
         check();
         return await runProgram(input, {
-          computer: async (name, args, callSignal) => { check(); const result = await api.execute({ sessionId: grant.sessionId, name, args }, { signal: AbortSignal.any([active, callSignal]), includePostImage: false }); check(); return result; },
+          computer: async (name, args, callSignal) => { check(); const result = await api.execute({ sessionId: grant.sessionId, name, args }, { signal: AbortSignal.any([active, callSignal]), includePostImage: false, program: true }); check(); return result; },
           browser: async (operation, args, callSignal) => { check(); if (!browserTask) throw new Error("The browser is unavailable."); const result = await browserTask({ sessionId: grant.sessionId, operation, args }, { signal: AbortSignal.any([active, callSignal]) }); check(); return result; },
         }, active);
       } catch {
@@ -1284,10 +1328,10 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
     /**
      * Tool calls from the engine, scoped to the requesting chat by the bridge.
      * @param {ChatInput & { name?: string, args?: Record<string, unknown> }} input
-     * @param {{ signal?: AbortSignal, includePostImage?: boolean }} options
+     * @param {{ signal?: AbortSignal, includePostImage?: boolean, program?: boolean }} options
      * @returns {Promise<ComputerResult>}
      */
-    async execute({ sessionId, name, args } = {}, { signal = new AbortController().signal, includePostImage = true } = {}) {
+    async execute({ sessionId, name, args } = {}, { signal = new AbortController().signal, includePostImage = true, program = false } = {}) {
       let limit = null;
       try {
         if (!Object.hasOwn(COMPUTER_TOOLS, name)) return failure("unknown_tool", "This computer tool does not exist.");
@@ -1320,9 +1364,10 @@ export function createComputerControl({ adapters, runProgram, runScript, onTimin
         if (!featureEnabled || generation !== featureGeneration || grant.adapter.placement === "remote" && remoteRevision !== remoteGeneration) return failure("computer_unavailable", "Computer use was turned off while this request was waiting. Nothing was dispatched.");
         if (supportsKeepFront(targetFor(grant)) && keepFrontRevision !== keepFrontGeneration) return failure("operation_interrupted", "Computer focus policy changed while this request was waiting. Nothing was dispatched.");
         if (args.screenshot !== undefined && typeof args.screenshot !== "boolean") return failure("invalid_arguments", "screenshot must be true or false.");
-        // screenshot:false returns the settled elements without an image; the native call never sees it.
+        // screenshot:false returns the settled elements without an image and true always attaches one;
+        // omitted, the computer adds one only when it helps. The native act never sees it.
         const { screenshot, ...nativeArgs } = args;
-        const call = { name, includePostImage: includePostImage && screenshot !== false, args: structuredClone(nativeArgs), grant, revision: grant.revision, featureGeneration: generation, remoteGeneration: remoteRevision, remoteTarget: grant.adapter.placement === "remote" };
+        const call = { name, program, postImage: !includePostImage || screenshot === false ? false : screenshot, args: structuredClone(nativeArgs), grant, revision: grant.revision, featureGeneration: generation, remoteGeneration: remoteRevision, remoteTarget: grant.adapter.placement === "remote" };
         // The operation budget starts once the person has answered.
         limit = deadline(operationMs);
         const started = now();

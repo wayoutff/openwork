@@ -2,7 +2,6 @@
 
 import { Fragment } from "react"
 
-import { markFeatureUsed } from "@/app/lib/den"
 import { RAIL_LINE, RAIL_ROW, RailMeta, TextSentenceLine, TrailingChevron } from "@/components/chat/activity-rail"
 import { useCurrentToolLifecycleResolver } from "@/components/chat/current-tool-lifecycle-context"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
@@ -10,7 +9,7 @@ import { TextCommandCard, TextDiffCard, TextDiffStats, TextTechnicalDetails } fr
 import { t } from "@/i18n"
 import { isBashToolPart, isEditToolPart, isWriteToolPart } from "@/lib/build-in-tools"
 import { textDiffStats, textGroupDiffStats, textGroupSummary, textStepSentence, type TextStepStatus } from "@/lib/text-activity"
-import { getAggregateNowPart, getToolAggregateLifecycle, type AggregateThought, type AnyToolPart } from "@/lib/tool-aggregate"
+import { getToolAggregateLifecycle, type AggregateThought, type AnyToolPart } from "@/lib/tool-aggregate"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { cn } from "@/lib/utils"
 import { useWorkbenchDisclosure } from "@/react-app/domains/session/chat/workbench-ui-state"
@@ -101,7 +100,6 @@ function TextStepRow({ row, status, disclosureKey }: {
           aria-expanded={open}
           aria-label={open ? t("text_activity.hide_details", { label: `${sentence.verb} ${sentence.object}` }) : t("text_activity.show_details", { label: `${sentence.verb} ${sentence.object}` })}
           onClick={() => {
-            if (!open) markFeatureUsed("textActivityRail")
             setOpen(!open)
           }}
           className={cn(RAIL_ROW, RAIL_LINE, "w-full cursor-pointer text-start hover:text-foreground")}
@@ -121,7 +119,9 @@ function TextStepRow({ row, status, disclosureKey }: {
 /**
  * Consecutive local steps, text-first: one summary line ("Explored 2 files,
  * 1 search, ran 4 commands +11 −3 ›") that opens into one sentence per step.
- * While running, the step happening now shimmers after the summary.
+ * While running, the summary is in the present tense ("Editing 2 files,
+ * running 2 commands") and nothing else rides on the line; the step happening
+ * now is one click away, and the Working line below is the one shimmer.
  */
 export function TextToolAggregateGroup({ parts, messageId, thoughts = [], className }: {
   parts: AnyToolPart[]
@@ -167,9 +167,6 @@ export function TextToolAggregateGroup({ parts, messageId, thoughts = [], classN
   const segments = textGroupSummary(parts, running ? "present" : "past")
   const stats = textGroupDiffStats(parts)
   const failedCount = parts.filter((part) => part.state === "output-error").length
-  const nowPart = running ? getAggregateNowPart(parts) : null
-  const now = nowPart ? textStepSentence(nowPart, "running") : null
-  const thinkingNow = !now && Boolean(thoughts.at(-1)?.isStreaming)
   const visibleRows = showAll ? rows : rows.slice(0, ROW_CAP)
   const hiddenCount = rows.length - visibleRows.length
   const trailingThoughts = hiddenCount > 0 ? [] : thoughts.filter((thought) => thought.afterIndex >= parts.length)
@@ -180,7 +177,6 @@ export function TextToolAggregateGroup({ parts, messageId, thoughts = [], classN
         type="button"
         aria-expanded={expanded}
         onClick={() => {
-          if (!expanded) markFeatureUsed("textActivityRail")
           setExpanded(!expanded)
         }}
         className={cn(RAIL_ROW, RAIL_LINE, "w-full cursor-pointer text-start hover:text-foreground")}
@@ -195,8 +191,6 @@ export function TextToolAggregateGroup({ parts, messageId, thoughts = [], classN
             </Fragment>
           ))}
         </span>
-        {now ? <TextSentenceLine verb={now.verb} object={now.object} tone="running" className="flex-1" /> : null}
-        {thinkingNow ? <TextSentenceLine verb={t("text_activity.thinking")} tone="running" className="flex-1" /> : null}
         {stats ? <TextDiffStats added={stats.added} removed={stats.removed} /> : null}
         {failedCount > 0 ? <RailMeta className="text-red-11">{t("text_activity.failed_count", { count: failedCount })}</RailMeta> : null}
         <TrailingChevron open={expanded} />
